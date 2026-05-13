@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "usb_output.h"
 #include "tnc.h"
 #include "usb_input.h"
+#include "usb_multi.h"
 #include "serial.h"
 #include "unproto.h"
 #include "kiss.h"
@@ -54,13 +55,15 @@ tty_t tty[TTY_N];
 //static int cmd_idx = 0;
 
 static const enum TTY_MODE tty_mode[] = {
-    TTY_TERMINAL,
+    TTY_TERMINAL,  // TTY_USB  (KISS)
+    TTY_TERMINAL,  // TTY_USB2 (TNC2 text mode)
     TTY_TERMINAL,
     TTY_GPS,
 };
 
 static const enum TTY_SERIAL tty_serial[] = {
     TTY_USB,
+    TTY_USB2,
     TTY_UART0,
     TTY_UART1,
 };
@@ -75,6 +78,8 @@ void tty_init(void)
         ttyp->tty_mode = tty_mode[i];
         ttyp->tty_serial = tty_serial[i];
 
+        // Both TTY_USB and TTY_USB2 start in TNC2 text mode.
+        // Send the KISS command to switch a port to KISS mode.
         ttyp->kiss_mode = false;
     }
 }
@@ -82,7 +87,12 @@ void tty_init(void)
 void tty_write(tty_t *ttyp, uint8_t const *data, int len)
 {
     if (ttyp->tty_serial == TTY_USB) {
-        usb_write(data, len);
+        usb_multi_write(USB_CDC_TNC2_0, data, len);
+        return;
+    }
+
+    if (ttyp->tty_serial == TTY_USB2) {
+        usb_multi_write(USB_CDC_TNC2_1, data, len);
         return;
     }
 
@@ -92,7 +102,12 @@ void tty_write(tty_t *ttyp, uint8_t const *data, int len)
 void tty_write_char(tty_t *ttyp, uint8_t ch)
 {
     if (ttyp->tty_serial == TTY_USB) {
-        usb_write_char(ch);
+        usb_multi_write_char(USB_CDC_TNC2_0, ch);
+        return;
+    }
+
+    if (ttyp->tty_serial == TTY_USB2) {
+        usb_multi_write_char(USB_CDC_TNC2_1, ch);
         return;
     }
 
@@ -165,6 +180,8 @@ void tty_input(tty_t *ttyp, int ch)
 
     switch (ch) {
         case FEND: // KISS frame end
+            // Auto-enter KISS mode when a KISS frame is received.
+            ttyp->kiss_mode = true;
             kiss_input(ttyp, ch);
             break;
 

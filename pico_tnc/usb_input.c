@@ -36,14 +36,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "kiss.h"
 
-// usb cdc callback function
-void tud_cdc_rx_cb(uint8_t itf)
-{
-    int len = tud_cdc_available();
-
-    for (int i = 0; i < len; i++) {
-        int ch = tud_cdc_read_char();
-
-        tty_input(&tty[TTY_USB], ch);
-    }
-}
+// tud_cdc_rx_cb is defined in usb_multi.c which routes per-interface:
+//   itf 1 (USB_CDC_KISS)  -> tty_input(&tty[TTY_USB], ch)
+//   itf 2 (USB_CDC_AGWPE) -> agwpe_usb_input()
+// Nothing to do here.

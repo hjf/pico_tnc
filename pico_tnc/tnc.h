@@ -48,7 +48,7 @@
 #define BEACON_PORT 0
 
 #define KISS_PACKET_LEN 1024                // kiss packet length
-#define TTY_N 3                             // number of serial
+#define TTY_N 4                             // number of serial
 #define CMD_BUF_LEN 255
 
 
@@ -219,7 +219,8 @@ enum TTY_MODE {
 };
 
 enum TTY_SERIAL {
-    TTY_USB = 0,
+    TTY_USB = 0,   // TNC2 port 0 on USB CDC 1
+    TTY_USB2,      // TNC2 port 1 on USB CDC 2
     TTY_UART0,
     TTY_UART1,
 };

@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "usb_input.h"
 #include "serial.h"
 #include "unproto.h"
+#include "usb_multi.h"
 
 #define GPS_LEN 127
 #define GPS_INTERVAL (3 * 60 * 100) // 3 min.
@@ -73,6 +74,9 @@ static void gps_send(uint8_t *buf, int len)
 
 void gps_input(int ch)
 {
+    // Forward every raw NMEA byte to the GPS passthrough CDC port
+    usb_multi_write_char(USB_CDC_GPS, (uint8_t)ch);
+
     if (ch == DOLLAR) gps_idx = 0;
 
     if (gps_idx < GPS_LEN) gps_buf[gps_idx++] = ch;

@@ -35,6 +35,10 @@ uint32_t __tnc_time;
 
 tnc_t tnc[PORT_N];
 
+#ifndef DIGI_ENABLE
+#define DIGI_ENABLE 0
+#endif
+
 param_t param = {
     .mycall = { 0, 0, },
     .unproto = { { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, },
@@ -45,7 +49,7 @@ param_t param = {
     .gps = 0,
     .trace = 0,
     .mon = 0,
-    .digi = 0,
+    .digi = DIGI_ENABLE,
     .beacon = 0,
 };
 

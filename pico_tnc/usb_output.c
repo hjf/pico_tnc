@@ -28,106 +28,28 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "class/cdc/cdc_device.h"
-#include "pico/sync.h"
-#include "pico/util/queue.h"
 
-#define QUEUE_SIZE 1024
-
-static queue_t usb_queue;
+// usb_write/usb_write_char are legacy stubs; tty.c now calls usb_multi_write directly.
+#include "usb_multi.h"
 
 void usb_output_init(void)
 {
-    queue_init(&usb_queue, sizeof(uint8_t), QUEUE_SIZE);
-    assert(usb_queue != NULL);
+    // Initialisation handled by usb_multi_init() in pico-digipeater.c
 }
 
 void usb_write(uint8_t const *data, int len)
 {
-    int i;
-
-    if (!tud_cdc_connected()) return;
-
-    if (!queue_is_empty(&usb_queue)) {
-
-        for (i = 0; i < len; i++) {
-            if (!queue_try_add(&usb_queue, &data[i])) break;
-        }
-        return;
-    }
-    
-    int free = tud_cdc_write_available();
-        
-    if (free >= len) {
-        tud_cdc_write(data, len);
-        tud_cdc_write_flush();
-        return;
-    }
-
-    tud_cdc_write(data, free);
-    tud_cdc_write_flush();
-
-    for (i = free; i < len; i++) {
-        if (!queue_try_add(&usb_queue, &data[i])) break;
-    }
+    usb_multi_write(USB_CDC_TNC2_0, data, len);
 }
 
 void usb_write_char(uint8_t ch)
 {
-    int i = 0;
-
-    if (!tud_cdc_connected()) return;
-
-    if (!queue_is_empty(&usb_queue)) {
-
-        queue_try_add(&usb_queue, &ch);
-        return;
-    }
-
-    if (tud_cdc_write_available() > 0) {
-
-        tud_cdc_write_char(ch);
-        tud_cdc_write_flush();
-        return;
-    }
-
-    queue_try_add(&usb_queue, &ch);
+    usb_multi_write_char(USB_CDC_TNC2_0, ch);
 }
 
 void usb_output(void)
 {
-    uint8_t data;
-
-    if (!tud_cdc_connected()) return;
-
-    if (queue_is_empty(&usb_queue)) return;
-
-    while (tud_cdc_write_available() > 0) {
-        if (queue_try_remove(&usb_queue, &data)) {
-            tud_cdc_write_char(data);
-        } else {
-            break;
-        }
-    }
-    tud_cdc_write_flush();
-}
-
-// TinyUSB callback function
-void tud_cdc_tx_complete_cb(uint8_t itf)
-{
-    uint8_t data;
-
-    if (queue_is_empty(&usb_queue)) return; // no queued data
-
-    int free = tud_cdc_write_available();
-
-    while (free > 0) {
-
-        if (!queue_try_remove(&usb_queue, &data)) break;
-
-        tud_cdc_write_char(data);
-        --free;
-    }
-    tud_cdc_write_flush();
+    // Flushing handled inside usb_multi_task()
 }
 
 #if 0

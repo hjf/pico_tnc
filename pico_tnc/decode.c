@@ -38,6 +38,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "digipeat.h"
 #include "kiss.h"
+#include "agwpe.h"
+#include "igate.h"
 
 #define FCS_OK 0x0f47
 //#define FCS_OK (0x0f47 ^ 0xffff)
@@ -80,7 +82,8 @@ static void display_packet(tty_t *ttyp, tnc_t *tp)
                 }
                 if (i >= 14 && (c & 0x80)) tty_write_char(ttyp, '*'); // H bit
 		        if (i == 6) tty_write_char(ttyp, '>');
-                else tty_write_char(ttyp, in_addr ? ',' : ':');
+                else if (in_addr) tty_write_char(ttyp, ',');
+                else { tty_write_char(ttyp, ':'); i += 2; } // skip AX.25 control + PID bytes
 
 	        } else { // CALLSIGN
 
@@ -120,6 +123,12 @@ static void output_packet(tnc_t *tp)
 
     // count received packet
     ++tp->pkt_cnt;
+
+    agwpe_monitor_rf_packet(data, len);
+
+    // iGate every heard RF packet (independent of digipeat state).
+    // The TNC2 conversion strips the 2-byte FCS internally.
+    igate_gate_rf_packet(data, len);
 
     // digipeat
     if (param.digi) digipeat(tp);

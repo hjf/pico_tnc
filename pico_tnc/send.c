@@ -49,13 +49,12 @@ static const int ptt_pins[] = {
 
 static void __isr dma_handler(void)
 {
-    int int_status = dma_hw->ints0;
-
-    //printf("irq: %08x\n", dma_hw->ints0);
-
+    uint32_t int_status = dma_hw->ints0;
+    uint32_t own_mask = 0;
 
     for (int i = 0; i < PORT_N; i++) {
         tnc_t *tp = &tnc[i];
+        own_mask |= tp->data_chan_mask;
 
         if (int_status & tp->data_chan_mask) {
 
@@ -64,23 +63,18 @@ static void __isr dma_handler(void)
             if (queue_try_remove(&tp->dac_queue, &addr)) {
             
                 dma_channel_set_read_addr(tp->ctrl_chan, addr, true);
-#if 0
-            printf("dma_hander: block = %p\n", &block[0]);
-            for (int i = 0; i < CONTROL_N + 1; i++) {
-                printf("block[%d] = %p\n", i, block[i]);
-            }
-#endif
+
             } else {
                 gpio_put(tp->ptt_pin, 0); // PTT off
-                //pwm_set_chan_level(tp->pwm_slice, PWM_CHAN_A, 0); // set pwm level 0
                 tp->busy = false;
-                //printf("(%u) dma_handler: queue is empty, port = %d, data_chan = %d, ints = %08x\n", tnc_time(), tp->port, tp->data_chan, int_status);
             }
-            //dma_hw->ints0 = tp->data_chan_mask;
         }
     } // for
 
-    dma_hw->ints0 = int_status;
+    // Only clear interrupt bits that belong to this handler.
+    // Do NOT clear bits owned by the CYW43 WiFi driver which also
+    // shares DMA_IRQ_0 on Pico W.
+    dma_hw->ints0 = int_status & own_mask;
 }
 
 static void send_start(tnc_t *tp)
@@ -291,21 +285,22 @@ void send_init(void)
         dma_channel_set_irq0_enabled(tp->data_chan, true);
     }
 
-    // configure IRQ
-    irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
-    //irq_add_shared_handler(DMA_IRQ_0, dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
+    // configure IRQ as shared: CYW43 also uses DMA_IRQ_0 on Pico W
+    irq_add_shared_handler(DMA_IRQ_0, dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     irq_set_enabled(DMA_IRQ_0, true);
 
     // ISR time measurement
     gpio_init(ISR_PIN);
     gpio_set_dir(ISR_PIN, true);
 
+#if !PICO_CYW43_SUPPORTED
+    // GPIO23 is CYW43 WL_REG_ON on Pico W — do not touch it
 #define SMPS_PIN 23
-
     // SMPS set PWM mode
     gpio_init(SMPS_PIN);
     gpio_set_dir(SMPS_PIN, true);
     gpio_put(SMPS_PIN, 1);
+#endif
 }
 
 

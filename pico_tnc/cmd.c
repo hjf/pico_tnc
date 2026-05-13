@@ -248,18 +248,29 @@ static bool cmd_unproto(tty_t *ttyp, uint8_t *buf, int len)
 
         for (i = 1; i < UNPROTO_N; i++) param.unproto[i].call[0] = '\0';
 
-        for (i = 1; *p && i < 4; i++) {
+        while (*p == ' ') p++;
+        if (!*p) return true;  // destination only, no path
 
-            while (*p == ' ') p++;
+        // Accept "VIA" or "V" as the keyword before the digipeater list
+        if (toupper(*p) != 'V') return false;
+        p++;
+        // Skip the rest of "VIA" if spelled out
+        if (toupper(*p) == 'I') { p++; if (toupper(*p) == 'A') p++; }
+        if (*p != ' ' && *p != '\0') return false;
+        while (*p == ' ') p++;
 
-            if (toupper(*p) != 'V') return false;
-            p++;
-            if (*p != ' ') return false;
-
-            while (*p == ' ') p++;
-
+        // Parse comma-separated or "V"-separated digipeater list
+        for (i = 1; *p && i < UNPROTO_N; i++) {
             p = read_call(p, &param.unproto[i]);
-            if (p == NULL) return false;
+            if (p == NULL) { param.unproto[i].call[0] = '\0'; break; }
+            while (*p == ' ') p++;
+            if (*p == ',') { p++; while (*p == ' ') p++; continue; }
+            // Handle "V" or "VIA" between digipeaters (original format)
+            if (toupper(*p) == 'V') {
+                p++;
+                if (toupper(*p) == 'I') { p++; if (toupper(*p) == 'A') p++; }
+                while (*p == ' ') p++;
+            }
         }
 
     } else {
@@ -364,6 +375,10 @@ static bool cmd_monitor(tty_t *ttyp, uint8_t *buf, int len)
             param.mon = MON_ME;
         } else if (!strncasecmp(buf, "OFF", 3)) {
             param.mon = MON_OFF;
+        } else if (buf[0] == '0') {
+            param.mon = MON_OFF;  // TNC2-style "MON 0" = monitor off
+        } else if (buf[0] >= '1' && buf[0] <= '9') {
+            param.mon = MON_ALL;  // TNC2-style "MON 1" (or any non-zero) = monitor all
         } else {
             return false;
         }
@@ -739,7 +754,11 @@ void cmd(tty_t *ttyp, uint8_t *buf, int len)
         tud_cdc_write_flush();
 #endif
      
-        if (cp->len >= n && !strncasecmp(top, cp->name, n)) {
+        // For single-char commands (like K), require exact match to avoid
+        // ambiguity with longer commands (e.g. K vs KISS).
+        bool exact = (n == cp->len);
+        bool prefix = (cp->len > n) && (n > 1);
+        if ((exact || prefix) && !strncasecmp(top, cp->name, n)) {
             ++matched;
             mp = cp;
         }
