@@ -30,6 +30,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tnc.h"
 #include "ax25.h"
 #include "flash.h"
+#include "send.h"
+#include "digipeat.h"
 
 uint32_t __tnc_time;
 
@@ -121,4 +123,20 @@ void tnc_init(void)
     if (param.txdelay > 0) {
         tnc[0].kiss_txdelay = param.txdelay * 2 / 3;
     }
+}
+
+// Inject an AX.25 frame for transmission from outside pico_tnc (e.g. iGate
+// IS->RF gating). `data` is the raw AX.25 frame WITHOUT trailing FCS —
+// send_packet() computes and appends it. Returns false if the send queue
+// is full or the port number is invalid.
+//
+// The frame is also recorded in the digipeat dedup table so that if it
+// loops back through RF reception during the hold-off window, our own
+// digipeater won't re-transmit it.
+bool tnc_inject_tx(int port, const uint8_t *data, int len)
+{
+    if (port < 0 || port >= PORT_N) return false;
+    if (!send_packet(&tnc[port], (uint8_t *)data, len)) return false;
+    digipeat_record_rx(data, len);
+    return true;
 }

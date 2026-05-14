@@ -124,6 +124,11 @@ static void output_packet(tnc_t *tp)
     // count received packet
     ++tp->pkt_cnt;
 
+    // Record every heard frame in the digipeat dedup table BEFORE we
+    // schedule a repeat — that way, a wide-area digi's later copy lands
+    // on top of the same hash and suppresses our held-off TX.
+    digipeat_record_rx(data, len - 2);  // strip trailing FCS for hash
+
     agwpe_monitor_rf_packet(data, len);
 
     // iGate every heard RF packet (independent of digipeat state).

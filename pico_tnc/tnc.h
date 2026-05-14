@@ -171,6 +171,13 @@ extern uint32_t __tnc_time;
 
 void tnc_init(void);
 
+// Bridge for non-pico_tnc modules (e.g. iGate IS->RF gating) to queue an
+// AX.25 frame for transmission. `data` is the raw AX.25 frame WITHOUT
+// trailing FCS; send_packet computes and appends it. Also records the
+// frame in the digipeat dedup table to suppress loopback re-digipeating.
+// Returns false on invalid port or queue full.
+bool tnc_inject_tx(int port, const uint8_t *data, int len);
+
 inline uint32_t tnc_time(void)
 {
     return __tnc_time;
