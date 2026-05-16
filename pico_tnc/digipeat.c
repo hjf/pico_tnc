@@ -61,7 +61,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DIGI_HOLDOFF_MS 0
 #endif
 
+#ifndef DIGI_LOCAL_ORIGIN_TTL_MS
+#define DIGI_LOCAL_ORIGIN_TTL_MS (30 * 60 * 1000)
+#endif
+
 #define MAX_DIGI_ALIASES 8
+#define DIGI_LOCAL_ORIGIN_SIZE 32
 
 // Each alias stores the AX.25 name (space-padded, NOT shifted) and the
 // maximum incoming SSID we will serve (1..15). We accept any packet whose
@@ -75,6 +80,79 @@ typedef struct {
 static digi_alias_t digi_aliases[MAX_DIGI_ALIASES];
 static int n_digi_aliases = 0;
 static bool digi_init_done = false;
+
+typedef struct {
+    callsign_t call;
+    absolute_time_t last;
+} digi_local_origin_entry_t;
+
+static digi_local_origin_entry_t digi_local_origins[DIGI_LOCAL_ORIGIN_SIZE];
+
+static bool local_origin_entry_fresh(const digi_local_origin_entry_t *e, absolute_time_t now)
+{
+    if (!e->call.call[0] || is_nil_time(e->last)) return false;
+    int64_t age = absolute_time_diff_us(e->last, now);
+    return age >= 0 && age <= (int64_t)DIGI_LOCAL_ORIGIN_TTL_MS * 1000;
+}
+
+static bool local_origin_contains_addr(const uint8_t *addr)
+{
+    absolute_time_t now = get_absolute_time();
+
+    for (int i = 0; i < DIGI_LOCAL_ORIGIN_SIZE; i++) {
+        digi_local_origin_entry_t *e = &digi_local_origins[i];
+        if (!local_origin_entry_fresh(e, now)) {
+            e->call.call[0] = '\0';
+            e->last = nil_time;
+            continue;
+        }
+
+        if (ax25_callcmp(&e->call, (uint8_t *)addr)) return true;
+    }
+
+    return false;
+}
+
+void digipeat_record_local_origin(const uint8_t *packet, int len)
+{
+    if (len < AX25_ADDR_LEN * 2) return;
+
+    callsign_t src = {0};
+    for (int i = 0; i < 6; i++) {
+        src.call[i] = (char)(packet[AX25_ADDR_LEN + i] >> 1);
+    }
+    src.ssid = (packet[AX25_ADDR_LEN + SSID_LOC] >> 1) & 0x0f;
+
+    absolute_time_t now = get_absolute_time();
+    int evict = -1;
+
+    for (int i = 0; i < DIGI_LOCAL_ORIGIN_SIZE; i++) {
+        digi_local_origin_entry_t *e = &digi_local_origins[i];
+
+        if (!local_origin_entry_fresh(e, now)) {
+            if (evict < 0) evict = i;
+            continue;
+        }
+
+        if (ax25_callcmp(&e->call, (uint8_t *)(packet + AX25_ADDR_LEN))) {
+            e->last = now;
+            return;
+        }
+    }
+
+    if (evict < 0) {
+        evict = 0;
+        for (int i = 1; i < DIGI_LOCAL_ORIGIN_SIZE; i++) {
+            if (absolute_time_diff_us(digi_local_origins[i].last,
+                                      digi_local_origins[evict].last) > 0) {
+                evict = i;
+            }
+        }
+    }
+
+    digi_local_origins[evict].call = src;
+    digi_local_origins[evict].last = now;
+}
 
 static int strip_trailing_spaces(const char *name)
 {
@@ -361,8 +439,13 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
     if (len < AX25_MIN_LEN) return;
     if (!ax25_ui(packet, len)) return;
 
-    // Never digipeat our own packets.
+    // Never digipeat packets sourced by or addressed to MYCALL.
     if (ax25_callcmp(&param.mycall, &packet[AX25_ADDR_LEN])) return;
+    if (ax25_callcmp(&param.mycall, packet)) return;
+
+    // If destination is a station recently seen originating locally
+    // (KISS/AGWPE), suppress RF digipeating to avoid duplex starvation.
+    if (local_origin_contains_addr(packet)) return;
 
     int offset = AX25_ADDR_LEN;                       // src addr
     if (packet[offset + SSID_LOC] & 1) return;        // no digis in path

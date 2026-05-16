@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tnc.h"
 #include "send.h"
 #include "tty.h"
+#include "digipeat.h"
 
 #define FEND 0xc0
 #define FESC 0xdb
@@ -78,6 +79,7 @@ void kiss_packet(tty_t *ttyp)
 
         case KISS_DATA:
             // send kiss packet
+            digipeat_record_local_origin(&ttyp->kiss_buf[1], ttyp->kiss_idx - 1);
             send_packet(tp, &ttyp->kiss_buf[1], ttyp->kiss_idx - 1); // delete kiss type byte
             break;
 

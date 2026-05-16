@@ -36,6 +36,11 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len);
 // so a wide-area digi's repeat matches its original.
 void digipeat_record_rx(const uint8_t *packet, int len);
 
+// Records source callsigns of packets originating from local clients
+// (KISS/AGWPE/serial). RF packets addressed to these stations are
+// suppressed in digipeat() for a limited TTL window.
+void digipeat_record_local_origin(const uint8_t *packet, int len);
+
 // Drains the hold-off pending-TX slots. Call from the main loop.
 // Slots whose hold-off has elapsed are either transmitted (via
 // send_packet) or silently suppressed if another digi was heard
