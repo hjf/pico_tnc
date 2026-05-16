@@ -161,6 +161,18 @@ static void output_packet(tnc_t *tp)
 
 #define AX25_FLAG 0x7e
 
+// DCD watchdog: if we entered DATA state on a noise-induced flag and the
+// decoder is stuck without producing further bytes, give up after this many
+// 10 ms ticks so CSMA can release the channel.
+#define DCD_WATCHDOG_TICKS 20
+
+static void dcd_set(tnc_t *tp, int on)
+{
+    if (tp->dcd == on) return;
+    tp->dcd = on;
+    gpio_put(tp->cdt_pin, on ? 1 : 0);
+}
+
 static void decode_bit(tnc_t *tp, int bit)
 {
     tp->flag <<= 1;
@@ -180,6 +192,7 @@ static void decode_bit(tnc_t *tp, int bit)
 	    if ((tp->flag & 0x3f) == 0x3f) { // AX.25 flag, end of packet, six continuous "1" bits
 	        output_packet(tp);
 	        tp->state = FLAG;
+	        dcd_set(tp, 0);
 	        break;
 	    }
 
@@ -193,9 +206,14 @@ static void decode_bit(tnc_t *tp, int bit)
             else {
                 printf("packet too long > %d\n", tp->data_cnt);
                 tp->state = FLAG;
+                dcd_set(tp, 0);
                 break;
             }
 	        tp->data_bit_cnt = 0;
+	        // First/next data byte successfully decoded in DATA state — a real
+	        // frame is being received. Assert DCD (preamble is past).
+	        tp->dcd_last_byte_time = tnc_time();
+	        if (!tp->dcd) dcd_set(tp, 1);
 	    }
     }
 }
@@ -275,20 +293,21 @@ void demodulator(tnc_t *tp, int adc)
 #define CDT_THR_LOW 1024
 #define CDT_THR_HIGH (CDT_THR_LOW * 2) // low +6dB
 
-    if (!tp->cdt && tp->cdt_lvl > CDT_THR_HIGH) { // CDT on
+    if (!tp->cdt && tp->cdt_lvl > CDT_THR_HIGH) { // CDT on (signal energy only — demod gate)
 
-        gpio_put(tp->cdt_pin, 1);
         tp->cdt = true;
-        //printf("(%u) decode: CDT on, adc: %d, cdt_lvl: %d, avg: %d, port = %d\n", tnc_time(), adc, tp->cdt_lvl, tp->avg, tp->port);
-        //printf("(%u) decode: cdt on, port = %d\n", tnc_time(), tp->port);
 
     } else if (tp->cdt && tp->cdt_lvl < CDT_THR_LOW) { // CDT off
 
-        gpio_put(tp->cdt_pin, 0);
         tp->cdt = false;
-        //printf("(%u) decode: CDT off, adc: %d, cdt_lvl: %d, avg: %d, port = %d\n", tnc_time(), adc, tp->cdt_lvl, tp->avg, tp->port);
-        //printf("(%u) decode: cdt off, port = %d\n", tnc_time(), tp->port);
 
+    }
+
+    // DCD watchdog: drop DCD if we've been stuck in DATA state without any
+    // further byte arriving (e.g. fell into DATA on a noise-induced 0x7e).
+    if (tp->dcd && (tnc_time() - tp->dcd_last_byte_time) >= DCD_WATCHDOG_TICKS) {
+        tp->state = FLAG;
+        dcd_set(tp, 0);
     }
 
     if (!tp->cdt) return;

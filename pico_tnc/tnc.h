@@ -101,6 +101,10 @@ typedef struct TNC {
     int avg;
     uint8_t cdt_pin;
 
+    // data carrier detect (asserted only when HDLC frame bytes are decoded)
+    int dcd;
+    uint32_t dcd_last_byte_time;
+
     // bell202_decode2
     int sum_low_i;
     int sum_low_q;

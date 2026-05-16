@@ -53,9 +53,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //   rand(0, DIGI_HOLDOFF_JITTER_MS) — so synchronous fill-ins don't all
 //   key up at the same instant.
 // TODO(digipeat): external GPIO carrier-detect input — gate TX on
-//   (!tp->cdt) && (!gpio_get(EXT_CD_PIN)) for radios whose squelch
-//   tracks faster than the HDLC-derived cdt.
-// HDLC-based carrier-sense (tp->cdt) already gates TX in send.c.
+//   (!tp->dcd) && (!gpio_get(EXT_CD_PIN)) for radios whose squelch
+//   tracks faster than the HDLC-derived dcd.
+// HDLC-based carrier-sense (tp->dcd) already gates TX in send.c. tp->cdt
+// is now signal-energy only and used internally as a demod gate.
 #ifndef DIGI_HOLDOFF_MS
 #define DIGI_HOLDOFF_MS 0
 #endif
