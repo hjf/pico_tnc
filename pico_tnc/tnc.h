@@ -15,7 +15,7 @@
 #define PORT_N 1    // number of ports, 1..3
 
 #define BAUD_RATE 1200
-#define SAMPLING_N 11
+#define SAMPLING_N 33
 //#define DELAY_N 3
 //#define SAMPLING_RATE ((1000000*DELAY_N+DELAY_US/2)/DELAY_US)
 #define SAMPLING_RATE (BAUD_RATE * SAMPLING_N)
@@ -26,10 +26,10 @@
 
 #define DATA_LEN 1024                   // packet receive buffer size
 
-#define FIR_LPF_N 27
-#define FIR_BPF_N 25
+#define FIR_LPF_N 81
+#define FIR_BPF_N 75
 
-#define ADC_BIT 8       // adc bits 8 or 12
+#define ADC_BIT 12
 //#define ADC_BIT 12      // adc bits 8 or 12
 
 //#define BELL202_SYNC 1  // sync decode
@@ -38,7 +38,7 @@
 // Number of parallel bit-slicers per port. Each runs its own PLL + NRZI +
 // HDLC state machine over the shared LPF output, biased by a per-slicer
 // threshold offset. Frame-level dedupe drops duplicate decodes.
-#define NUM_SLICERS 7
+#define NUM_SLICERS 9
 
 // Recent-frame ring for cross-slicer dedupe: when multiple slicers decode the
 // same frame, only the first to FCS_OK wins. Ring stores (fcs ^ len) keys
