@@ -95,9 +95,33 @@ void tnc_init(void)
 
         // receive
         tp->port = i;
-        tp->state = FLAG;
         filter_init(&tp->lpf, lpf_an, FIR_LPF_N);
         filter_init(&tp->bpf, bpf_an, FIR_BPF_N);
+
+        // Per-slicer state. Threshold offsets are spread symmetrically around
+        // zero on the LPF_THRESHOLD (=4096) scale, mirroring Dire Wolf's
+        // exponential gain ladder but applied additively (since our LPF
+        // output is already zero-mean, an additive offset is the right knob
+        // for biasing the sign-decision point). Tuned empirically; see the
+        // host replay harness under tests/replay/.
+        static const int16_t slicer_offsets[NUM_SLICERS] = {
+#if NUM_SLICERS == 1
+            0,
+#elif NUM_SLICERS == 3
+            -6144, 0, +6144,
+#elif NUM_SLICERS == 5
+            -8192, -3072, 0, +3072, +8192,
+#elif NUM_SLICERS == 7
+            -10240, -5120, -2048, 0, +2048, +5120, +10240,
+#else
+#error "Unsupported NUM_SLICERS — add an offset ladder for this count"
+#endif
+        };
+        for (int j = 0; j < NUM_SLICERS; j++) {
+            slicer_t *s = &tp->slicer[j];
+            s->offset = slicer_offsets[j];
+            s->state = FLAG;
+        }
 
         // send queue
         queue_init(&tp->send_queue, sizeof(uint8_t), SEND_QUEUE_LEN);

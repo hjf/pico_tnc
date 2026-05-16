@@ -40,4 +40,4 @@ enum KISS_STATE {
 };
 
 void kiss_input(tty_t *ttyp, int ch);
-void kiss_output(tty_t *ttyp, tnc_t *tp);
+void kiss_output(tty_t *ttyp, tnc_t *tp, slicer_t *s);

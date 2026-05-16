@@ -35,6 +35,24 @@
 //#define BELL202_SYNC 1  // sync decode
 #define DECODE_PLL 1    // use PLL
 
+// Number of parallel bit-slicers per port. Each runs its own PLL + NRZI +
+// HDLC state machine over the shared LPF output, biased by a per-slicer
+// threshold offset. Frame-level dedupe drops duplicate decodes.
+#define NUM_SLICERS 7
+
+// Recent-frame ring for cross-slicer dedupe: when multiple slicers decode the
+// same frame, only the first to FCS_OK wins. Ring stores (fcs ^ len) keys
+// with a 1.5 s expiry at 10 ms ticks.
+#define DEDUP_RING 8
+#define DEDUP_TIMEOUT_TICKS 150
+
+// Fix-bits single-bit-invert salvage on FCS-fail frames. Different slicers
+// often produce the same garbled bytes for an impossible-to-decode frame —
+// the fix-bits attempts ring suppresses redundant inner-loop runs across
+// slicers in a 1.5 s window.
+#define ENABLE_FIXBITS  1
+#define FIXBITS_RING    4
+
 #define CONTROL_N 10
 #define DAC_QUEUE_LEN 64
 #define DAC_BLOCK_LEN (DAC_QUEUE_LEN + 1)
@@ -66,29 +84,51 @@ typedef struct {
 
 typedef struct TTY tty_t;
 
+// Per-slicer state: each slicer slices the shared LPF output through its own
+// threshold offset, runs its own DireWolf-style PLL clock recovery, NRZI
+// decode, HDLC framer (flag detect, bit destuff), and frame buffer. With
+// NUM_SLICERS>1 the slicers vote at frame level via dedupe in output_packet.
+typedef struct SLICER {
+    int16_t  offset;          // per-slicer threshold offset (set at init)
+    uint8_t  bit;             // last sliced bit (0/1)
+    uint8_t  pval;             // previous bit for PLL edge detect
+    uint8_t  edge;             // sample counter for non-PLL clock recovery
+    int32_t  pll_counter;      // DireWolf PLL phase accumulator
+    uint8_t  nrzi;             // last raw bit for NRZI XOR
+    uint8_t  state;            // FLAG / DATA
+    uint8_t  flag;             // 8-bit shift register for 0x7e detect
+    uint8_t  data_byte;
+    uint8_t  data_bit_cnt;
+    uint16_t data_cnt;
+    uint32_t dcd_last_byte_time; // per-slicer DCD watchdog
+    uint8_t  data[DATA_LEN];
+} slicer_t;
+
+typedef struct DEDUP_ENTRY {
+    uint16_t fcs;        // trailing 16-bit FCS
+    uint16_t len;        // total frame length including FCS
+    uint8_t  prefix[4];  // first 4 frame bytes (start of dest call)
+    uint32_t ts;         // tick when seen
+} dedup_entry_t;
+
 typedef struct TNC {
     uint8_t port;
 
     // receive
 
-    // demodulator
-    uint8_t bit;
+    // parallel bit slicers — each owns its own PLL + NRZI + HDLC state
+    slicer_t slicer[NUM_SLICERS];
 
-    // decode_bit
-    uint16_t data_cnt;
-    uint8_t data[DATA_LEN];
-    uint8_t state;
-    uint8_t flag;
-    uint8_t data_byte;
-    uint8_t data_bit_cnt;
+    // recent-frame dedupe ring (cross-slicer)
+    dedup_entry_t dedup_ring[DEDUP_RING];
+    uint8_t       dedup_head;
 
-    // decode
-    uint8_t edge;
-    
-    // decode2
-    int32_t pll_counter;
-    uint8_t pval;
-    uint8_t nrzi;
+#if ENABLE_FIXBITS
+    // recent fix-bits-attempt ring: suppress redundant inner-loop runs when
+    // multiple slicers produce the same FCS-fail bytes for one physical frame
+    dedup_entry_t fixbits_ring[FIXBITS_RING];
+    uint8_t       fixbits_head;
+#endif
 
     // output_packet
     int pkt_cnt;
@@ -101,9 +141,8 @@ typedef struct TNC {
     int avg;
     uint8_t cdt_pin;
 
-    // data carrier detect (asserted only when HDLC frame bytes are decoded)
+    // data carrier detect LED state (OR of per-slicer in-frame flags)
     int dcd;
-    uint32_t dcd_last_byte_time;
 
     // bell202_decode2
     int sum_low_i;

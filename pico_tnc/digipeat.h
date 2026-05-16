@@ -28,7 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #pragma once
 #include "tnc.h"
 
-void digipeat(tnc_t *tp);
+void digipeat(tnc_t *tp, uint8_t *packet, int len);
 
 // Records every valid received frame in the dedup table. Called from
 // decode.c output_packet() for all heard frames. `len` is the logical

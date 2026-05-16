@@ -353,10 +353,8 @@ void digipeat_poll(void)
 
 // ---- digipeat() --------------------------------------------------------
 
-void digipeat(tnc_t *tp)
+void digipeat(tnc_t *tp, uint8_t *packet, int len)
 {
-    uint8_t *packet = tp->data;
-    int len = tp->data_cnt;
 
     if (!digi_init_done) digipeat_init();
 
