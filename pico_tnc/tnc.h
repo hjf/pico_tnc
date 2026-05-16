@@ -97,6 +97,7 @@ typedef struct SLICER {
     uint8_t  nrzi;             // last raw bit for NRZI XOR
     uint8_t  state;            // FLAG / DATA
     uint8_t  flag;             // 8-bit shift register for 0x7e detect
+    uint8_t  ui_seen;          // 0x03 control byte decoded past address field — LED gate
     uint8_t  data_byte;
     uint8_t  data_bit_cnt;
     uint16_t data_cnt;
@@ -141,8 +142,17 @@ typedef struct TNC {
     int avg;
     uint8_t cdt_pin;
 
-    // data carrier detect LED state (OR of per-slicer in-frame flags)
+    // data carrier detect (logical): OR of per-slicer in-frame flags.
+    // Trips on the first byte past a perceived preamble — used by CSMA to
+    // hold off TX. This is intentionally loose: a noise-induced 0x7e plus
+    // one decoded byte is enough.
     int dcd;
+
+    // LED state: a *tighter* version of DCD that drives cdt_pin. Only
+    // asserted once a slicer has accumulated LED_MIN_BYTES of in-frame
+    // data, so noise-induced false preambles (which the DCD watchdog
+    // clears within ~200 ms) don't blink the LED.
+    int led_on;
 
     // bell202_decode2
     int sum_low_i;

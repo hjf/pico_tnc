@@ -303,21 +303,47 @@ static void dcd_set(tnc_t *tp, int on)
 {
     if (tp->dcd == on) return;
     tp->dcd = on;
+}
+
+// LED gating — borrowed from arduino_tnc: only light when an in-frame byte
+// equals the AX.25 UI control byte (0x03), which by AX.25 framing rules
+// can only legally appear immediately after the address field. We further
+// require data_cnt >= AX25_MIN_ADDR_BYTES + 1 (i.e., 15) so a stray 0x03
+// in a short noise blip can't trip it. Net effect: the LED tracks "we
+// are decoding a real AX.25 UI frame", not "a flag-like pattern arrived".
+#define AX25_UI_CONTROL 0x03
+#define AX25_MIN_ADDR_BYTES 14   // dst (7) + src (7), no digis
+
+static void led_set(tnc_t *tp, int on)
+{
+    if (tp->led_on == on) return;
+    tp->led_on = on;
     gpio_put(tp->cdt_pin, on ? 1 : 0);
 }
 
 // Recompute the global DCD LED as the OR of per-slicer in-frame flags.
 // At NUM_SLICERS=1 this is just the single slicer's state.
+//
+// DCD (logical, used by CSMA) trips on any slicer mid-frame.
+// LED only follows slicers that have seen a UI control byte at a valid
+// position — that flag is cleared every time a slicer enters DATA, so
+// the LED naturally goes dark on end-of-frame / watchdog / packet-too-long.
 static void dcd_recompute(tnc_t *tp)
 {
     int any_in_frame = 0;
+    int any_real_frame = 0;
     for (int j = 0; j < NUM_SLICERS; j++) {
-        if (tp->slicer[j].state == DATA && tp->slicer[j].data_cnt > 0) {
+        slicer_t *s = &tp->slicer[j];
+        if (s->state == DATA && s->data_cnt > 0) {
             any_in_frame = 1;
-            break;
+            if (s->ui_seen) {
+                any_real_frame = 1;
+                break;
+            }
         }
     }
     dcd_set(tp, any_in_frame);
+    led_set(tp, any_real_frame);
 }
 
 static void decode_bit_slicer(tnc_t *tp, slicer_t *s, int bit)
@@ -331,6 +357,7 @@ static void decode_bit_slicer(tnc_t *tp, slicer_t *s, int bit)
 	        s->state = DATA;
 	        s->data_cnt = 0;
 	        s->data_bit_cnt = 0;
+	        s->ui_seen = 0;
 	    }
 	    break;
 
@@ -356,10 +383,18 @@ static void decode_bit_slicer(tnc_t *tp, slicer_t *s, int bit)
                 break;
             }
 	        s->data_bit_cnt = 0;
-	        // First/next data byte successfully decoded in DATA state — a real
-	        // frame is being received. Assert DCD (preamble is past).
+	        // A byte successfully decoded in DATA state — a frame is being
+	        // received. Assert DCD on the first byte (preamble is past). The
+	        // LED only follows the UI-control-byte gate, which arduino_tnc
+	        // showed is a reliable "real AX.25 frame" indicator.
 	        s->dcd_last_byte_time = tnc_time();
 	        if (!tp->dcd) dcd_set(tp, 1);
+	        if (!s->ui_seen &&
+	            s->data_byte == AX25_UI_CONTROL &&
+	            s->data_cnt > AX25_MIN_ADDR_BYTES) {
+	            s->ui_seen = 1;
+	            if (!tp->led_on) led_set(tp, 1);
+	        }
 	    }
     }
 }
