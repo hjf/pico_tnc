@@ -34,8 +34,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define BYTE_BITS 8
 #define BIT_STUFF_BITS 5
 
+// Per-packet flag bits stored in the send queue (one byte per packet, ahead
+// of the length field). Read in SP_READ_FLAGS and consumed by the rest of
+// the state machine.
+#define SP_FLAG_SKIP_CSMA  0x01   // skip p-persistence; key the moment DCD clears
+
 int send_byte(tnc_t *tp, uint8_t data, bool bit_stuff);
 void send_init(void);
 void send(void);
 int send_queue_free(tnc_t *tp);
 bool send_packet(tnc_t *tp, uint8_t *data, int len);
+// Same as send_packet() but bypasses p-persistence/slottime — the TNC keys
+// up as soon as the channel is clear.  Use for digipeated frames per
+// APRS Protocol Reference §3 / WB2OSZ §3.2.1 (digis rely on FM capture, not
+// random backoff).  Not appropriate for KISS/AGWPE-originated traffic.
+bool send_packet_now(tnc_t *tp, uint8_t *data, int len);

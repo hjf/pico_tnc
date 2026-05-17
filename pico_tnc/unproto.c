@@ -61,7 +61,11 @@ void send_unproto(tnc_t *tp, uint8_t *data, int len)
 
     pkt_len += 2 + len + 2; // CONTL + PID + info + FCS
 
-    if (send_queue_free(tp) < pkt_len + 2) return;
+    if (send_queue_free(tp) < pkt_len + 3) return;
+
+    // per-packet flags (none — UNPROTO uses normal p-persistence CSMA)
+    byte = 0;
+    queue_try_add(&tp->send_queue, &byte);
 
     // packet length
     byte = pkt_len;

@@ -41,6 +41,12 @@ void digipeat_record_rx(const uint8_t *packet, int len);
 // suppressed in digipeat() for a limited TTL window.
 void digipeat_record_local_origin(const uint8_t *packet, int len);
 
+// True iff the 7-byte AX.25 address at `addr` matches a callsign recently
+// seen as the source of a locally-originated packet (KISS/AGWPE/serial).
+// Used by digipeat() (suppress RF repeat to a local destination) and by
+// the iGate (suppress APRS-IS gating of our own echoed transmissions).
+bool digipeat_addr_is_local_origin(const uint8_t *addr);
+
 // Drains the hold-off pending-TX slots. Call from the main loop.
 // Slots whose hold-off has elapsed are either transmitted (via
 // send_packet) or silently suppressed if another digi was heard

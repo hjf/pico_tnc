@@ -87,12 +87,16 @@ static void send_start(tnc_t *tp)
     }
 }
 
-bool send_packet(tnc_t *tp, uint8_t *data, int len)
+static bool send_packet_flags(tnc_t *tp, uint8_t *data, int len, uint8_t flags)
 {
     int length = len + 2; // fcs 2 byte
     uint8_t byte;
 
-    if (send_queue_free(tp) < length + 2) return false; // queue has no room
+    // Queue layout per packet: [flags][len_lo][len_hi][data...][fcs_lo][fcs_hi]
+    if (send_queue_free(tp) < length + 3) return false; // queue has no room
+
+    byte = flags;
+    queue_try_add(&tp->send_queue, &byte);
 
     // packet length
     byte = length;
@@ -114,6 +118,16 @@ bool send_packet(tnc_t *tp, uint8_t *data, int len)
     queue_try_add(&tp->send_queue, &byte);
 
     return true;
+}
+
+bool send_packet(tnc_t *tp, uint8_t *data, int len)
+{
+    return send_packet_flags(tp, data, len, 0);
+}
+
+bool send_packet_now(tnc_t *tp, uint8_t *data, int len)
+{
+    return send_packet_flags(tp, data, len, SP_FLAG_SKIP_CSMA);
 }
 
 int send_byte(tnc_t *tp, uint8_t data, bool bit_stuff)
@@ -320,15 +334,31 @@ void send(void)
             case SP_IDLE:
                 //printf("(%d) send: SP_IDEL\n", tnc_time());
                 if (!queue_is_empty(&tp->send_queue)) {
-                    tp->send_state = SP_WAIT_CLR_CH;
+                    tp->send_state = SP_READ_FLAGS;
                     continue;
                 }
                 break;
-                    
+
+            case SP_READ_FLAGS:
+                // First byte of each queued packet is per-packet flags.
+                if (!queue_try_remove(&tp->send_queue, &data)) {
+                    tp->send_state = SP_IDLE;
+                    break;
+                }
+                tp->send_flags = data;
+                tp->send_state = SP_WAIT_CLR_CH;
+                continue;
+
             case SP_WAIT_CLR_CH:
                 //printf("(%d) send: SP_WAIT_CLR_CH\n", tnc_time());
                 if (tp->kiss_fullduplex || !tp->dcd) {
-                    tp->send_state = SP_P_PERSISTENCE;
+                    // YOLO digi: skip p-persistence so all colocated digis
+                    // commit to keying the moment DCD clears — FM capture
+                    // then decides cleanly. (APRS Protocol Reference §3 /
+                    // WB2OSZ §3.2.1.)
+                    tp->send_state = (tp->send_flags & SP_FLAG_SKIP_CSMA)
+                                         ? SP_PTT_ON
+                                         : SP_P_PERSISTENCE;
                     continue;
                 }
                 break;
@@ -360,6 +390,9 @@ void send(void)
                 /* FALLTHROUGH */
 
             case SP_SEND_FLAGS:
+                // Pre-data preamble path: emit kiss_txdelay * 10 ms of HDLC
+                // flag bytes after PTT-on, then drop into SP_DATA_START.
+                // The packet's flag byte was already consumed in SP_READ_FLAGS.
                 //printf("(%d) send: SP_SEND_FLAGS\n", tnc_time());
                 while (tp->send_len > 0 && send_byte(tp, AX25_FLAG, false)) { // false: bit stuffing off
                     --tp->send_len;
@@ -399,7 +432,7 @@ void send(void)
                 if (!send_byte(tp, tp->send_data, true)) break;
                 if (tp->send_len <= 0) {
                     tp->send_len = 1;
-                    tp->send_state = SP_SEND_FLAGS;
+                    tp->send_state = SP_SEND_TRAILING_FLAG;
                     send_start(tp);
                     continue;
                 }
@@ -411,6 +444,27 @@ void send(void)
                 --tp->send_len;
                 tp->send_data = data;
                 continue;
+
+            case SP_SEND_TRAILING_FLAG:
+                // Post-data path: emit one inter-packet HDLC flag.  If
+                // another packet is queued, chain into it (reuse the
+                // already-on PTT) by reading its per-packet flag byte
+                // before SP_DATA_START reads the length.
+                while (tp->send_len > 0 && send_byte(tp, AX25_FLAG, false)) {
+                    --tp->send_len;
+                }
+                if (tp->send_len > 0) break;
+                tp->cnt_one = 0;
+                if (!queue_is_empty(&tp->send_queue)) {
+                    uint8_t flag_byte;
+                    if (queue_try_remove(&tp->send_queue, &flag_byte)) {
+                        tp->send_flags = flag_byte;
+                        tp->send_state = SP_DATA_START;
+                        continue;
+                    }
+                }
+                tp->send_state = SP_IDLE;
+                break;
 
             case SP_ERROR:
                 //printf("(%d) send: SP_ERROR\n", tnc_time());

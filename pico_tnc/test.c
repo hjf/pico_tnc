@@ -104,8 +104,14 @@ void test(void)
 
         case TEST_PACKET_START:
             //printf("(%d) test: TEST_PACKET_START\n", tnc_time());
-            if (SEND_QUEUE_LEN - queue_get_level(&tp->send_queue) < tp->packet_len + 2) { // "2" means length field (16bit)
+            if (SEND_QUEUE_LEN - queue_get_level(&tp->send_queue) < tp->packet_len + 3) { // 1 flag + 2 length + payload
                 //printf("(%u) test: send_queue is full, port = %d\n", tnc_time(), tp->port);
+                break;
+            }
+            // per-packet flags (test mode: no special flags)
+            data = 0;
+            if (!queue_try_add(&tp->send_queue, &data)) {
+                tp->test_state = TEST_ERROR;
                 break;
             }
             // packet length

@@ -203,6 +203,7 @@ typedef struct TNC {
     int send_len;
     int send_state;
     int send_data;
+    uint8_t send_flags;  // per-packet flags (read in SP_READ_FLAGS)
 
     // field for test packet
     int test_state;
@@ -308,11 +309,13 @@ extern tty_t tty[];
 // send process state
 enum SEND_STATE {
     SP_IDLE = 0,
+    SP_READ_FLAGS,
     SP_WAIT_CLR_CH,
     SP_P_PERSISTENCE,
     SP_WAIT_SLOTTIME,
     SP_PTT_ON,
-    SP_SEND_FLAGS,
+    SP_SEND_FLAGS,            // preamble (pre-data HDLC flags)
+    SP_SEND_TRAILING_FLAG,    // post-data flag; may chain to next packet
     SP_DATA_START,
     SP_DATA,
     SP_ERROR,
