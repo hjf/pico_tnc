@@ -281,6 +281,15 @@ static bool digi_parse_call(const char *in, callsign_t *out)
     return true;
 }
 
+bool digipeat_call_str_is_local_origin(const char *call_str)
+{
+    callsign_t c;
+    if (!digi_parse_call(call_str, &c)) return false;
+    uint8_t addr[AX25_ADDR_LEN];
+    ax25_mkax25addr(addr, &c);
+    return digipeat_addr_is_local_origin(addr);
+}
+
 static void digipeat_init(void)
 {
     const char *path = DIGI_PATH;

@@ -47,6 +47,13 @@ void digipeat_record_local_origin(const uint8_t *packet, int len);
 // the iGate (suppress APRS-IS gating of our own echoed transmissions).
 bool digipeat_addr_is_local_origin(const uint8_t *addr);
 
+// String-friendly version of digipeat_addr_is_local_origin.  Accepts
+// "CALL" or "CALL-SSID" (uppercase ASCII).  Used by the iGate to decide
+// whether an inbound APRS-IS message should be delivered into the AGWPE
+// monitor stream rather than gated to RF (aprx-style: keep the bytes off
+// the air when the addressee is sitting on our TCP socket).
+bool digipeat_call_str_is_local_origin(const char *call_str);
+
 // Drains the hold-off pending-TX slots. Call from the main loop.
 // Slots whose hold-off has elapsed are either transmitted (via
 // send_packet) or silently suppressed if another digi was heard
