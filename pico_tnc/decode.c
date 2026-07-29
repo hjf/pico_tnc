@@ -38,6 +38,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "digipeat.h"
 #include "kiss.h"
+#include "kiss_tcp.h"
 #include "agwpe.h"
 #include "igate.h"
 
@@ -263,6 +264,7 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     digipeat_record_rx(data, len - 2);  // strip trailing FCS for hash
 
     agwpe_monitor_rf_packet(data, len);
+    kiss_tcp_monitor_rf_packet(data, len);
 
     // iGate every heard RF packet (independent of digipeat state).
     // The TNC2 conversion strips the 2-byte FCS internally.
