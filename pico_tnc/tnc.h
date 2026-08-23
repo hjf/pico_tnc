@@ -66,7 +66,11 @@
 #define BEACON_PORT 0
 
 #define KISS_PACKET_LEN 1024                // kiss packet length
+#if PICO_TNC_PARENT_INTEGRATION
 #define TTY_N 4                             // number of serial
+#else
+#define TTY_N 3                             // number of serial
+#endif
 #define CMD_BUF_LEN 255
 
 
@@ -281,7 +285,9 @@ enum TTY_MODE {
 
 enum TTY_SERIAL {
     TTY_USB = 0,   // TNC2 port 0 on USB CDC 1
+#if PICO_TNC_PARENT_INTEGRATION
     TTY_USB2,      // TNC2 port 1 on USB CDC 2
+#endif
     TTY_UART0,
     TTY_UART1,
 };

@@ -38,7 +38,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "usb_output.h"
 #include "tnc.h"
 #include "usb_input.h"
+#if PICO_TNC_PARENT_INTEGRATION
 #include "usb_multi.h"
+#endif
 #include "serial.h"
 #include "unproto.h"
 #include "kiss.h"
@@ -55,15 +57,19 @@ tty_t tty[TTY_N];
 //static int cmd_idx = 0;
 
 static const enum TTY_MODE tty_mode[] = {
-    TTY_TERMINAL,  // TTY_USB  (KISS)
+    TTY_TERMINAL,  // TTY_USB
+#if PICO_TNC_PARENT_INTEGRATION
     TTY_TERMINAL,  // TTY_USB2 (TNC2 text mode)
+#endif
     TTY_TERMINAL,
     TTY_GPS,
 };
 
 static const enum TTY_SERIAL tty_serial[] = {
     TTY_USB,
+#if PICO_TNC_PARENT_INTEGRATION
     TTY_USB2,
+#endif
     TTY_UART0,
     TTY_UART1,
 };
@@ -87,14 +93,20 @@ void tty_init(void)
 void tty_write(tty_t *ttyp, uint8_t const *data, int len)
 {
     if (ttyp->tty_serial == TTY_USB) {
+#if PICO_TNC_PARENT_INTEGRATION
         usb_multi_write(USB_CDC_TNC2_0, data, len);
+#else
+        usb_write(data, len);
+#endif
         return;
     }
 
+#if PICO_TNC_PARENT_INTEGRATION
     if (ttyp->tty_serial == TTY_USB2) {
         usb_multi_write(USB_CDC_TNC2_1, data, len);
         return;
     }
+#endif
 
     if (ttyp->tty_serial == TTY_UART0) serial_write(data, len);
 }
@@ -102,14 +114,20 @@ void tty_write(tty_t *ttyp, uint8_t const *data, int len)
 void tty_write_char(tty_t *ttyp, uint8_t ch)
 {
     if (ttyp->tty_serial == TTY_USB) {
+#if PICO_TNC_PARENT_INTEGRATION
         usb_multi_write_char(USB_CDC_TNC2_0, ch);
+#else
+        usb_write_char(ch);
+#endif
         return;
     }
 
+#if PICO_TNC_PARENT_INTEGRATION
     if (ttyp->tty_serial == TTY_USB2) {
         usb_multi_write_char(USB_CDC_TNC2_1, ch);
         return;
     }
+#endif
 
     if (ttyp->tty_serial == TTY_UART0) serial_write_char(ch);
 }

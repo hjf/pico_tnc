@@ -51,7 +51,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #endif
 
 #include "cmd.h"
-//#include "usb_input.h"
+#include "usb_input.h"
 #include "usb_output.h"
 #include "serial.h"
 #include "tty.h"
@@ -137,8 +137,10 @@ int main()
         //kiss_output();
 
         // process uart I/O
+        usb_input();
         serial_input();
         serial_output();
+        usb_output();
 
 #ifdef TEST_PACKET
         // send test packet

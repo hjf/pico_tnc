@@ -36,7 +36,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "kiss.h"
 
-// tud_cdc_rx_cb is defined in usb_multi.c which routes per-interface:
+#if !PICO_TNC_PARENT_INTEGRATION
+void usb_input(void)
+{
+    int ch;
+    while ((ch = getchar_timeout_us(0)) >= 0) {
+        tty_input(&tty[TTY_USB], ch);
+    }
+}
+#endif
+
+// The parent integration routes input from usb_multi.c per interface:
 //   itf 1 (USB_CDC_KISS)  -> tty_input(&tty[TTY_USB], ch)
 //   itf 2 (USB_CDC_AGWPE) -> agwpe_usb_input()
-// Nothing to do here.

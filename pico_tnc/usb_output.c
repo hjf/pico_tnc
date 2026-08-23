@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pico/stdlib.h"
 #include "class/cdc/cdc_device.h"
 
+#if PICO_TNC_PARENT_INTEGRATION
 // usb_write/usb_write_char are legacy stubs; tty.c now calls usb_multi_write directly.
 #include "usb_multi.h"
 
@@ -51,6 +52,44 @@ void usb_output(void)
 {
     // Flushing handled inside usb_multi_task()
 }
+#else
+#include "pico/sync.h"
+#include "pico/stdio.h"
+#include "pico/util/queue.h"
+
+#define QUEUE_SIZE 1024
+
+static queue_t usb_queue;
+
+void usb_output_init(void)
+{
+    queue_init(&usb_queue, sizeof(uint8_t), QUEUE_SIZE);
+}
+
+void usb_write(uint8_t const *data, int len)
+{
+    for (int i = 0; i < len; i++) {
+        if (!queue_try_add(&usb_queue, &data[i])) break;
+    }
+}
+
+void usb_write_char(uint8_t ch)
+{
+    queue_try_add(&usb_queue, &ch);
+}
+
+void usb_output(void)
+{
+    char data[64];
+    int len = 0;
+
+    while (len < (int)sizeof(data)) {
+        if (!queue_try_remove(&usb_queue, &data[len])) break;
+        len++;
+    }
+    if (len > 0) stdio_put_string(data, len, false, false);
+}
+#endif
 
 #if 0
 void tud_cdc_rx_wanted_cb(uint8_t itf, char wanted_char)

@@ -38,9 +38,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "digipeat.h"
 #include "kiss.h"
+#if PICO_TNC_PARENT_INTEGRATION
 #include "kiss_tcp.h"
 #include "agwpe.h"
 #include "igate.h"
+#endif
 
 #define FCS_OK 0x0f47
 //#define FCS_OK (0x0f47 ^ 0xffff)
@@ -263,12 +265,14 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     // on top of the same hash and suppresses our held-off TX.
     digipeat_record_rx(data, len - 2);  // strip trailing FCS for hash
 
+#if PICO_TNC_PARENT_INTEGRATION
     agwpe_monitor_rf_packet(data, len);
     kiss_tcp_monitor_rf_packet(data, len);
 
     // iGate every heard RF packet (independent of digipeat state).
     // The TNC2 conversion strips the 2-byte FCS internally.
     igate_gate_rf_packet(data, len);
+#endif
 
     // digipeat
     if (param.digi) digipeat(tp, data, len);

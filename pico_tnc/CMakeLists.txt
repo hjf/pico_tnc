@@ -42,7 +42,11 @@ target_link_libraries(pico_tnc
 		)
 
 pico_enable_stdio_usb(pico_tnc 1)
-pico_enable_stdio_uart(pico_tnc 1)
+pico_enable_stdio_uart(pico_tnc 0)
+
+target_compile_definitions(pico_tnc PRIVATE
+    PICO_TNC_PARENT_INTEGRATION=0
+)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(pico_tnc)
