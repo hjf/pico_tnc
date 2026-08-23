@@ -103,6 +103,8 @@ void kiss_packet(tty_t *ttyp)
 
 void kiss_input(tty_t * ttyp, int ch)
 {
+    ttyp->kiss_timeout = tnc_time();
+
     switch (ttyp->kiss_state) {
 
         case KISS_OUTSIDE:
@@ -118,7 +120,10 @@ void kiss_input(tty_t * ttyp, int ch)
             switch (ch) {
                 case FEND:
                     kiss_packet(ttyp);      // send kiss packet
-                    ttyp->kiss_state = KISS_OUTSIDE;
+                    ttyp->kiss_idx = 0;
+                    // FEND is both the end of one frame and the start of the
+                    // next. Staying inside also accepts repeated sync FENDs.
+                    ttyp->kiss_state = ttyp->kiss_mode ? KISS_INSIDE : KISS_OUTSIDE;
                     break;
 
                 case FESC:

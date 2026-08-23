@@ -369,7 +369,7 @@ static bool cmd_monitor(tty_t *ttyp, uint8_t *buf, int len)
 {
     if (buf && buf[0]) {
 
-        if (!strncasecmp(buf, "ALL", 3)) {
+        if (!strncasecmp(buf, "ALL", 3) || !strncasecmp(buf, "ON", 2)) {
             param.mon = MON_ALL;
         } else if (!strncasecmp(buf, "ME", 2)) {
             param.mon = MON_ME;

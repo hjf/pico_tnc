@@ -53,10 +53,9 @@ void send_unproto(tnc_t *tp, uint8_t *data, int len)
 
     // count repeaters
     for (int i = 1; i < UNPROTO_N; i++) {
-        if (param.unproto[i].call[0]) { // exist repeater
-            pkt_len += AX25_ADDR_LEN;
-            repeaters++;
-        }
+        if (!param.unproto[i].call[0]) break;
+        pkt_len += AX25_ADDR_LEN;
+        repeaters++;
     }
 
     pkt_len += 2 + len + 2; // CONTL + PID + info + FCS
