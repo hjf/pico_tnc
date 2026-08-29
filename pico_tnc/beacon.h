@@ -27,5 +27,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
+#include <stdint.h>
+
+#define BEACON_PREVIEW_LEN (BTEXT_LEN + 80)
+
 void beacon(void);
 void beacon_reset(void);
+void beacon_now(void);
+int beacon_format(uint8_t *out, int size);
+int beacon_format_preview(uint8_t *out, int size);

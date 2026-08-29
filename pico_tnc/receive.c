@@ -99,6 +99,14 @@ static const uint8_t cdt_pins[] = {
     22, // dummy
 };
 
+void receive_led_update(void)
+{
+#if !PICO_TNC_PARENT_INTEGRATION
+    const bool heartbeat_on = tnc_time() % 100 < 10;
+    gpio_put(tnc[0].cdt_pin, tnc[0].led_on || heartbeat_on);
+#endif
+}
+
 
 void receive_init(void)
 {

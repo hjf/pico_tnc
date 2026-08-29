@@ -57,7 +57,7 @@ void usb_output(void)
 #include "pico/stdio.h"
 #include "pico/util/queue.h"
 
-#define QUEUE_SIZE 1024
+#define QUEUE_SIZE 2048
 
 static queue_t usb_queue;
 

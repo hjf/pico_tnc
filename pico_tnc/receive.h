@@ -30,3 +30,4 @@ void receive_init(void);
 void receive(void);
 void receive_off(void);
 void receive_on(void);
+void receive_led_update(void);

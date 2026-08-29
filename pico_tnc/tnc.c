@@ -26,6 +26,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <stdio.h>
+#include <string.h>
 
 #include "tnc.h"
 #include "ax25.h"
@@ -41,19 +42,70 @@ tnc_t tnc[PORT_N];
 #define DIGI_ENABLE 0
 #endif
 
-param_t param = {
-    .mycall = { 0, 0, },
-    .unproto = { { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, },
-    .myalias = { 0, 0 },
-    .btext = "",
-    .txdelay = 100,
-    .echo = 1,
-    .gps = 0,
-    .trace = 0,
-    .mon = 0,
-    .digi = DIGI_ENABLE,
-    .beacon = 0,
-};
+typedef struct LEGACY_TNC_PARAM {
+    callsign_t mycall;
+    callsign_t myalias;
+    callsign_t unproto[UNPROTO_N];
+    uint8_t btext[BTEXT_LEN + 1];
+    uint8_t txdelay;
+    uint8_t gps;
+    uint8_t mon;
+    uint8_t digi;
+    uint8_t beacon;
+    uint8_t trace;
+    uint8_t echo;
+} legacy_param_t;
+
+param_t param;
+
+static void param_set_defaults(void)
+{
+    param = (param_t) {
+        .format_magic = PARAM_FORMAT_MAGIC,
+        .unproto = {
+            { .call = { 'A', 'P', 'R', 'S', ' ', ' ' }, .ssid = 0 },
+        },
+        .txdelay = 100,
+        .echo = 1,
+        .digi = DIGI_ENABLE,
+        .digi_path = "WIDE1-1",
+        .digi_holdoff_ms = 1500,
+        .beacon_symbol_table = '/',
+        .beacon_symbol_code = '#',
+    };
+}
+
+static void param_read(void)
+{
+    uint32_t stored_magic = 0;
+    param_set_defaults();
+
+    if (!flash_read(&stored_magic, sizeof(stored_magic))) return;
+
+    if (stored_magic == PARAM_FORMAT_MAGIC) {
+        param_t stored;
+        if (flash_read(&stored, sizeof(stored))) param = stored;
+        return;
+    }
+
+    legacy_param_t legacy;
+    if (!flash_read(&legacy, sizeof(legacy))) return;
+    param.mycall = legacy.mycall;
+    param.myalias = legacy.myalias;
+    memcpy(param.unproto, legacy.unproto, sizeof(legacy.unproto));
+    if (!param.unproto[0].call[0]) {
+        memcpy(param.unproto[0].call, "APRS  ", sizeof(param.unproto[0].call));
+        param.unproto[0].ssid = 0;
+    }
+    memcpy(param.btext, legacy.btext, sizeof(legacy.btext));
+    param.txdelay = legacy.txdelay;
+    param.gps = legacy.gps;
+    param.mon = legacy.mon;
+    param.digi = legacy.digi;
+    param.beacon = legacy.beacon;
+    param.trace = legacy.trace;
+    param.echo = legacy.echo;
+}
 
 void tnc_init(void)
 {
@@ -143,7 +195,7 @@ void tnc_init(void)
     //printf("DELAYED_N = %d\n", DELAYED_N);
 
     // read flash
-    flash_read(&param, sizeof(param));
+    param_read();
 
     // set kiss txdelay
     if (param.txdelay > 0) {

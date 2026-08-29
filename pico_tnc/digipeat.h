@@ -30,6 +30,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 void digipeat(tnc_t *tp, uint8_t *packet, int len);
 
+// Validate and reload runtime digipeater configuration used by standalone
+// pico_tnc builds. Parent-integrated builds continue to use compile-time
+// DIGI_* definitions.
+bool digipeat_path_valid(const char *path);
+void digipeat_config_changed(void);
+
 // Records every valid received frame in the dedup table. Called from
 // decode.c output_packet() for all heard frames. `len` is the logical
 // packet length without trailing FCS. The hash excludes the digipath

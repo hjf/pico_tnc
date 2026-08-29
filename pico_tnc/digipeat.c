@@ -215,11 +215,11 @@ static int strip_trailing_spaces(const char *name)
     return n;
 }
 
-static void parse_one_alias(const char *start, const char *end)
+static bool parse_one_alias(const char *start, const char *end, digi_alias_t *alias)
 {
     while (start < end && isspace((unsigned char)*start)) start++;
     while (end > start && isspace((unsigned char)*(end - 1))) end--;
-    if (start >= end || n_digi_aliases >= MAX_DIGI_ALIASES) return;
+    if (start >= end) return false;
 
     const char *dash = NULL;
     for (const char *p = start; p < end; p++) {
@@ -228,27 +228,47 @@ static void parse_one_alias(const char *start, const char *end)
 
     const char *name_end = dash ? dash : end;
     int name_len = (int)(name_end - start);
-    if (name_len <= 0 || name_len > 6) return;
+    if (name_len <= 0 || name_len > 6) return false;
 
     int ssid = 0;
     if (dash) {
-        if (dash + 1 >= end) return;
+        if (dash + 1 >= end) return false;
         for (const char *p = dash + 1; p < end; p++) {
-            if (!isdigit((unsigned char)*p)) return;
+            if (!isdigit((unsigned char)*p)) return false;
             ssid = ssid * 10 + (*p - '0');
         }
-        if (ssid < 1 || ssid > 15) return;
+        if (ssid < 1 || ssid > 15) return false;
     } else {
         // bare name (e.g. "WIDE") — default to max ssid 7
         ssid = 7;
     }
 
-    digi_alias_t *a = &digi_aliases[n_digi_aliases++];
-    memset(a->name, ' ', 6);
+    memset(alias->name, ' ', 6);
     for (int i = 0; i < name_len; i++) {
-        a->name[i] = toupper((unsigned char)start[i]);
+        alias->name[i] = toupper((unsigned char)start[i]);
     }
-    a->max_ssid = (uint8_t)ssid;
+    alias->max_ssid = (uint8_t)ssid;
+    return true;
+}
+
+bool digipeat_path_valid(const char *path)
+{
+    if (!path || !path[0]) return false;
+
+    int count = 0;
+    const char *start = path;
+    for (const char *p = path; ; p++) {
+        if (*p == ',' || *p == '\0') {
+            digi_alias_t alias;
+            if (count >= MAX_DIGI_ALIASES || !parse_one_alias(start, p, &alias)) {
+                return false;
+            }
+            count++;
+            if (*p == '\0') break;
+            start = p + 1;
+        }
+    }
+    return count > 0;
 }
 
 // Parse "CALL[-SSID]" into a callsign_t.  Returns true on success.
@@ -292,20 +312,35 @@ bool digipeat_call_str_is_local_origin(const char *call_str)
 
 static void digipeat_init(void)
 {
+#if PICO_TNC_PARENT_INTEGRATION
     const char *path = DIGI_PATH;
+#else
+    const char *path = param.digi_path;
+#endif
+    n_digi_aliases = 0;
     const char *start = path;
     for (const char *p = path; ; p++) {
         if (*p == ',' || *p == '\0') {
-            parse_one_alias(start, p);
+            if (n_digi_aliases < MAX_DIGI_ALIASES
+                    && parse_one_alias(start, p, &digi_aliases[n_digi_aliases])) {
+                n_digi_aliases++;
+            }
             if (*p == '\0') break;
             start = p + 1;
         }
     }
 
     // Resolve our own callsign + optional alias from build-time config.
+#if PICO_TNC_PARENT_INTEGRATION
     digi_active = digi_parse_call(DIGI_MYCALL, &digi_mycall);
     digi_has_myalias = (DIGI_MYALIAS[0] != '\0')
                        && digi_parse_call(DIGI_MYALIAS, &digi_myalias);
+#else
+    digi_mycall = param.mycall;
+    digi_myalias = param.myalias;
+    digi_active = digi_mycall.call[0] != '\0';
+    digi_has_myalias = digi_myalias.call[0] != '\0';
+#endif
 
     digi_init_done = true;
 
@@ -326,6 +361,12 @@ static void digipeat_init(void)
         printf(" %.*s-%u", n, digi_aliases[i].name, digi_aliases[i].max_ssid);
     }
     printf("\n");
+}
+
+void digipeat_config_changed(void)
+{
+    digi_init_done = false;
+    n_digi_aliases = 0;
 }
 
 // Compare a 6-char alias name against an AX.25 address (shifted left 1).
@@ -480,7 +521,7 @@ void digipeat_record_rx(const uint8_t *packet, int len)
 // PORT_N=1 so file-scope storage is fine. If PORT_N grows these should
 // move into tnc_t (or become an array indexed by tp->port).
 
-#define DIGI_PENDING_SLOTS 2
+#define DIGI_PENDING_SLOTS DEDUP_RING
 
 typedef struct {
     bool active;
@@ -512,7 +553,11 @@ static bool digi_schedule_tx(tnc_t *tp, const uint8_t *frame, int len)
         s->tp = tp;
         s->hash = hash;
         s->scheduled_at = get_absolute_time();
-        s->fire_at = make_timeout_time_ms(DIGI_HOLDOFF_MS);  // 0 ms is fine
+    #if PICO_TNC_PARENT_INTEGRATION
+        s->fire_at = make_timeout_time_ms(DIGI_HOLDOFF_MS);
+    #else
+        s->fire_at = make_timeout_time_ms(param.digi_holdoff_ms);
+    #endif
         s->len = (uint16_t)len;
         memcpy(s->frame, frame, len);
         return true;

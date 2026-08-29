@@ -71,7 +71,7 @@ bool flash_write(void *data, int len)
 {
     if (len > FLASH_PAGE_SIZE - sizeof(uint32_t)) return false;
 
-    uint8_t *mem = malloc(FLASH_PAGE_SIZE);
+    uint8_t *mem = calloc(1, FLASH_PAGE_SIZE);
 
     if (mem == NULL) return false;
 

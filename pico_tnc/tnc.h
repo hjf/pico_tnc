@@ -257,10 +257,13 @@ enum GPS_SENTENCE {
 
 #define UNPROTO_N 4
 #define BTEXT_LEN 100
+#define DIGI_PATH_LEN 31
+#define PARAM_FORMAT_MAGIC 0x32434e54u
 
 
 // TNC parameter
 typedef struct TNC_PARAM {
+    uint32_t format_magic;
     callsign_t mycall;
     callsign_t myalias;
     callsign_t unproto[UNPROTO_N];
@@ -272,6 +275,13 @@ typedef struct TNC_PARAM {
     uint8_t beacon;
     uint8_t trace;
     uint8_t echo;
+    char digi_path[DIGI_PATH_LEN + 1];
+    uint16_t digi_holdoff_ms;
+    int32_t beacon_lat_e7;
+    int32_t beacon_lon_e7;
+    uint8_t beacon_position_set;
+    char beacon_symbol_table;
+    char beacon_symbol_code;
 } param_t;
 
 extern param_t param;

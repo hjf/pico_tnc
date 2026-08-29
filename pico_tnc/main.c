@@ -56,6 +56,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "serial.h"
 #include "tty.h"
 #include "beacon.h"
+#include "digipeat.h"
 
 #define TIME_10MS (10 * 1000)    // 10 ms = 10 * 1000 us
 
@@ -126,6 +127,10 @@ int main()
 
         // receive packet
         receive();
+        receive_led_update();
+
+        // drain digipeat hold-off slots
+        digipeat_poll();
 
         // send packet
         send();
