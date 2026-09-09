@@ -31,6 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "tnc.h"
 #include "beacon.h"
+#include "gps.h"
 #include "unproto.h"
 
 static uint32_t beacon_time = 0;
@@ -54,9 +55,10 @@ static void format_callsign(char *out, int size, const callsign_t *callsign)
 
 int beacon_format(uint8_t *out, int size)
 {
-  if (!param.beacon_position_set) {
+  if (param.beacon_position_set == BEACON_POSITION_OFF) {
     return snprintf((char *)out, size, "%s", param.btext);
   }
+  if (param.beacon_position_set == BEACON_POSITION_GPS && !gps_position_valid()) return 0;
 
   int64_t lat = param.beacon_lat_e7;
   int64_t lon = param.beacon_lon_e7;
@@ -78,11 +80,22 @@ int beacon_format(uint8_t *out, int size)
     lon_hundredths = 0;
   }
 
-  return snprintf((char *)out, size, "!%02d%02d.%02d%c%c%03d%02d.%02d%c%c%s",
+  int len = snprintf((char *)out, size, "!%02d%02d.%02d%c%c%03d%02d.%02d%c%c",
           lat_degrees, lat_hundredths / 100, lat_hundredths % 100,
           north_south, param.beacon_symbol_table,
           lon_degrees, lon_hundredths / 100, lon_hundredths % 100,
-          east_west, param.beacon_symbol_code, param.btext);
+          east_west, param.beacon_symbol_code);
+  if (len < 0 || len >= size) return len;
+
+  uint16_t course;
+  uint16_t speed;
+  if (param.beacon_position_set == BEACON_POSITION_GPS
+      && gps_motion_valid(&course, &speed)) {
+    len += snprintf((char *)out + len, size - len, "%03u/%03u", course, speed);
+    if (len < 0 || len >= size) return len;
+  }
+
+  return len + snprintf((char *)out + len, size - len, "%s", param.btext);
 }
 
 int beacon_format_preview(uint8_t *out, int size)
@@ -92,7 +105,7 @@ int beacon_format_preview(uint8_t *out, int size)
   char source[10];
   char destination[10];
   int information_len = beacon_format(information, sizeof(information));
-  if (information_len < 0 || information_len >= (int)sizeof(information)) return -1;
+  if (information_len <= 0 || information_len >= (int)sizeof(information)) return information_len;
 
   format_callsign(source, sizeof(source), &param.mycall);
   format_callsign(destination, sizeof(destination), &param.unproto[0]);

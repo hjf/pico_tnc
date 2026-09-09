@@ -44,8 +44,11 @@ target_link_libraries(pico_tnc
 pico_enable_stdio_usb(pico_tnc 1)
 pico_enable_stdio_uart(pico_tnc 0)
 
+include(${CMAKE_CURRENT_LIST_DIR}/pinout.cmake)
+
 target_compile_definitions(pico_tnc PRIVATE
     PICO_TNC_PARENT_INTEGRATION=0
+    ${PICO_TNC_PIN_COMPILE_DEFINITIONS}
 )
 
 # create map/bin/hex file etc.

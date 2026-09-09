@@ -41,6 +41,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "flash.h"
 #include "receive.h"
 #include "beacon.h"
+#include "gps.h"
 #include "digipeat.h"
 
 typedef struct CMD {
@@ -54,8 +55,8 @@ static char const help_str[] =
     "Commands are Case Insensitive\r\n"
     "Use Backspace Key (BS) for Correction\r\n"
     "Use the DISP command to desplay all options\r\n"
-    "Connect GPS for APRS Operation, (GP4/GP5/9600bps)\r\n"
-    "Connect to Terminal for Command Interpreter, (USB serial or GP0/GP1/115200bps)\r\n"
+    "Connect GPS RX to the configured pin (9600bps)\r\n"
+    "Connect to Terminal for Command Interpreter (USB serial or configured UART)\r\n"
     "\r\n"
     "Commands (with example):\r\n"
     "MYCALL (mycall jn1dff-2)\r\n"
@@ -70,13 +71,12 @@ static char const help_str[] =
     "DIGIHOLD (digihold 1500) milliseconds, 0..5000\r\n"
     "TOCALL (tocall APRS)\r\n"
     "BPATH (bpath WIDE1-1,WIDE2-1; bpath % clears)\r\n"
-    "BPOSITION (bposition -27.2963412,-58.6176194)\r\n"
+    "BPOSITION (bposition GPS or bposition -27.2963412,-58.6176194)\r\n"
     "BSYMBOL (bsymbol /#) table and symbol code\r\n"
     "BPREVIEW shows the complete APRS packet without transmitting\r\n"
 #endif
     "PERM (PERM)\r\n"
     "ECHO (echo on or echo off)\r\n"
-    "GPS (gps $GPGGA or gps $GPGLL or gps $GPRMC)\r\n"
     "TRace (tr xmit or tr rcv) - For debugging only\r\n"
     "TXDELAY (txdelay n 0<n<201 n is number of delay flags to send)\r\n"
     "CALIBRATE (Calibrate Mode - Testing Only)\r\n"
@@ -100,12 +100,6 @@ enum TRACE {
     TR_OFF = 0,
     TR_XMIT,
     TR_RCV,
-};
-
-static const uint8_t *gps_str[] = {
-    "$GPGGA",
-    "$GPGLL",
-    "$GPRMC",
 };
 
 // indicate converse mode
@@ -411,7 +405,13 @@ static bool cmd_bposition(tty_t *ttyp, uint8_t *buf, int len)
 {
     if (buf && buf[0]) {
         if (buf[0] == '%' && len == 1) {
-            param.beacon_position_set = 0;
+            param.beacon_position_set = BEACON_POSITION_OFF;
+            gps_position_reset();
+            return true;
+        }
+        if (!strcasecmp((char *)buf, "GPS")) {
+            param.beacon_position_set = BEACON_POSITION_GPS;
+            gps_position_reset();
             return true;
         }
 
@@ -427,10 +427,13 @@ static bool cmd_bposition(tty_t *ttyp, uint8_t *buf, int len)
         }
         param.beacon_lat_e7 = lat;
         param.beacon_lon_e7 = lon;
-        param.beacon_position_set = 1;
+        param.beacon_position_set = BEACON_POSITION_FIXED;
+        gps_position_reset();
     } else {
         tty_write_str(ttyp, "BPOSITION ");
-        if (param.beacon_position_set) {
+        if (param.beacon_position_set == BEACON_POSITION_GPS) {
+            tty_write_str(ttyp, gps_position_valid() ? "GPS" : "GPS (NO FIX)");
+        } else if (param.beacon_position_set == BEACON_POSITION_FIXED) {
             char value[32];
             int64_t lat = param.beacon_lat_e7;
             int64_t lon = param.beacon_lon_e7;
@@ -469,7 +472,11 @@ static bool cmd_bpreview(tty_t *ttyp, uint8_t *buf, int len)
     uint8_t packet[BEACON_PREVIEW_LEN];
     int size = beacon_format_preview(packet, sizeof(packet));
     tty_write_str(ttyp, "BPREVIEW ");
-    if (size > 0 && size < (int)sizeof(packet)) tty_write(ttyp, packet, size);
+    if (param.beacon_position_set == BEACON_POSITION_GPS && !gps_position_valid()) {
+        tty_write_str(ttyp, "NO GPS FIX");
+    } else if (size > 0 && size < (int)sizeof(packet)) {
+        tty_write(ttyp, packet, size);
+    }
     tty_write_str(ttyp, "\r\n");
     return true;
 }
@@ -712,30 +719,6 @@ static bool cmd_echo(tty_t *ttyp, uint8_t *buf, int len)
     return true;
 }
 
-static bool cmd_gps(tty_t *ttyp, uint8_t *buf, int len)
-{
-    if (buf && buf[0]) {
-
-        for (int i = 0; i < 3; i++) {
-            uint8_t const *str = gps_str[i];
-        
-            if (!strncasecmp(buf, str, strlen(str))) {
-                param.gps = i;
-                return true;
-            }
-        }
-        return false;
-
-    } else {
-
-        tty_write_str(ttyp, "GPS ");
-        tty_write_str(ttyp, gps_str[param.gps]);
-        tty_write_str(ttyp, "\r\n");
-    }
-
-    return true;
-}
-
 static bool cmd_trace(tty_t *ttyp, uint8_t *buf, int len)
 {
     if (buf && buf[0]) {
@@ -878,9 +861,6 @@ static bool cmd_disp(tty_t *ttyp, uint8_t *buf, int len)
     // txdelay
     cmd_txdelay(ttyp, NULL, 0);
 
-    // gps
-    cmd_gps(ttyp, NULL, 0);
-
     // trace
     cmd_trace(ttyp, NULL, 0);
 
@@ -945,7 +925,6 @@ static const cmd_t cmd_list[] = {
 #endif
     { "PERM", 4, cmd_perm, },
     { "ECHO", 4, cmd_echo, },
-    { "GPS", 3, cmd_gps, },
     { "TRACE", 5, cmd_trace, },
     { "TXDELAY", 7, cmd_txdelay, },
     { "CALIBRATE", 9, cmd_calibrate, },

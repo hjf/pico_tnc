@@ -26,4 +26,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #pragma once
+#include <stdbool.h>
+
 void gps_input(int ch);
+bool gps_position_valid(void);
+bool gps_motion_valid(uint16_t *course, uint16_t *speed);
+void gps_position_reset(void);

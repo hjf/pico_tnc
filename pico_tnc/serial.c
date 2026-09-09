@@ -41,6 +41,24 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define GPS_BAUDRATE 9600
 
+#ifndef PICO_TNC_GPS_RX_PIN
+#define PICO_TNC_GPS_RX_PIN 5
+#endif
+
+#ifndef PICO_TNC_GPS_UART_ID
+#define PICO_TNC_GPS_UART_ID 1
+#endif
+
+#ifndef PICO_TNC_TERMINAL_UART_ENABLE
+#define PICO_TNC_TERMINAL_UART_ENABLE 1
+#endif
+
+#if PICO_TNC_GPS_UART_ID == 0
+#define GPS_UART uart0
+#else
+#define GPS_UART uart1
+#endif
+
 static queue_t uart_queue;
 
 void serial_init(void)
@@ -48,6 +66,7 @@ void serial_init(void)
     queue_init(&uart_queue, sizeof(uint8_t), UART_QUEUE_LEN);
     assert(uart_queue != NULL);
 
+#if PICO_TNC_TERMINAL_UART_ENABLE
     uint baud = uart_init(uart0, UART_BAUDRATE);
 
     //printf("UART0 baud rate = %u\n", baud);
@@ -56,16 +75,16 @@ void serial_init(void)
 
     gpio_set_function(0, GPIO_FUNC_UART);
     gpio_set_function(1, GPIO_FUNC_UART);
+#endif
 
 #ifdef GPS_ENABLE
     // GPS
-    baud = uart_init(uart1, GPS_BAUDRATE);
+    uart_init(GPS_UART, GPS_BAUDRATE);
 
     //printf("UART1 baud rate = %u\n", baud);
 
-    uart_set_fifo_enabled(uart0, true);
-    gpio_set_function(4, GPIO_FUNC_UART);
-    gpio_set_function(5, GPIO_FUNC_UART);
+    uart_set_fifo_enabled(GPS_UART, true);
+    gpio_set_function(PICO_TNC_GPS_RX_PIN, GPIO_FUNC_UART);
 #endif
 }
 
@@ -85,6 +104,7 @@ void serial_write_char(uint8_t ch)
 
 void serial_output(void)
 {
+#if PICO_TNC_TERMINAL_UART_ENABLE
     if (queue_is_empty(&uart_queue)) return;
 
     while (uart_is_writable(uart0)) {
@@ -93,22 +113,25 @@ void serial_output(void)
         if (!queue_try_remove(&uart_queue, &ch)) break;
         uart_putc_raw(uart0, ch);
     }
+#endif
 }
 
 void serial_input(void)
 {
 #ifdef GPS_ENABLE
-    while (uart_is_readable(uart1)) {
-        int ch = uart_getc(uart1);
+    while (uart_is_readable(GPS_UART)) {
+        int ch = uart_getc(GPS_UART);
         gps_input(ch);
     }
 #endif
 
+#if PICO_TNC_TERMINAL_UART_ENABLE
     while (uart_is_readable(uart0)) {
 
         int ch = uart_getc(uart0);
         tty_input(&tty[TTY_UART0], ch);
     }
+#endif
 #if 0
     switch (ch) {
         case 0x08:

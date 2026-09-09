@@ -29,14 +29,22 @@
 //#include "wave_table.h"
 #include "wave_table.h"
 
+#ifndef PICO_TNC_PWM_PIN
+#define PICO_TNC_PWM_PIN 10
+#endif
+
+#ifndef PICO_TNC_PTT_PIN
+#define PICO_TNC_PTT_PIN 11
+#endif
+
 static const int pwm_pins[] = {
-    10, // port 0
+    PICO_TNC_PWM_PIN, // port 0
     8,  // port 1
     6,  // port 2
 };
 
 static const int ptt_pins[] = {
-    11, // port 0
+    PICO_TNC_PTT_PIN, // port 0
     9,  // port 1
     7,  // port 2
 };
