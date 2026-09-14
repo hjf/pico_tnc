@@ -71,6 +71,8 @@ void kiss_packet(tty_t *ttyp)
 
     if (port >= PORT_N) return;
 
+    if (PICO_TNC_STANDALONE) return; // monitor-only KISS; host cannot alter RF scheduling
+
     tnc_t *tp = &tnc[port];
     int val = ttyp->kiss_buf[1];
 
@@ -79,8 +81,12 @@ void kiss_packet(tty_t *ttyp)
 
         case KISS_DATA:
             // send kiss packet
-            digipeat_record_local_origin(&ttyp->kiss_buf[1], ttyp->kiss_idx - 1);
-            send_packet(tp, &ttyp->kiss_buf[1], ttyp->kiss_idx - 1); // delete kiss type byte
+#if !PICO_TNC_STANDALONE
+            if (send_packet(tp, &ttyp->kiss_buf[1], ttyp->kiss_idx - 1)) {
+                digipeat_record_local_origin(&ttyp->kiss_buf[1], ttyp->kiss_idx - 1);
+                digipeat_record_rx(&ttyp->kiss_buf[1], ttyp->kiss_idx - 1);
+            }
+#endif
             break;
 
         case KISS_TXDELAY:
@@ -149,6 +155,10 @@ void kiss_input(tty_t * ttyp, int ch)
                 case TFESC:
                     ch = FESC;
                     break;
+                default:
+                    ttyp->kiss_idx = 0;
+                    ttyp->kiss_state = ch == FEND ? KISS_INSIDE : KISS_ERROR;
+                    return;
             }
 
             if (ttyp->kiss_idx >= KISS_PACKET_LEN) {
@@ -162,7 +172,7 @@ void kiss_input(tty_t * ttyp, int ch)
 
         case KISS_ERROR:
             // discard chars until FEND
-            if (ch == FEND) ttyp->kiss_state = KISS_OUTSIDE;
+            if (ch == FEND) { ttyp->kiss_idx = 0; ttyp->kiss_state = KISS_INSIDE; }
     }
 }
 

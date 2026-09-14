@@ -34,6 +34,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "hardware/irq.h"
 #include "pico/sem.h"
 #include "hardware/watchdog.h"
+#include "hardware/sync.h"
+#include <string.h>
 
 // For resistor DAC output:
 //#include "pico/multicore.h"
@@ -62,29 +64,23 @@ static uint16_t buf[BUF_NUM][BUF_LEN];
 // DMA channel for ADC
 static int dma_chan;
 
-static semaphore_t sem;
+static volatile uint32_t produced;
+static uint32_t consumed;
+static uint64_t last_processed_us;
+static uint16_t samples[BUF_LEN];
+static uint32_t overruns;
+
+bool receive_healthy(void)
+{
+    return time_us_64() - last_processed_us < 250000;
+}
+
 
 static void dma_handler(void) {
-    static int buf_next = 1;
-#if 0
-    if (sem_available(&sem) == BUF_NUM) {
-        printf("ADC: DMA buffer overrun\n");
-        assert(false);
-    }
-#endif
+    dma_hw->ints1 = 1u << dma_chan;
+    ++produced;
+    dma_channel_set_write_addr(dma_chan, buf[produced & (BUF_NUM - 1)], true);
 
-    // set buffer address
-    dma_channel_set_write_addr(dma_chan, buf[buf_next], true); // trigger DMA
-
-    // release semaphore
-    sem_release(&sem);
-
-    // advance ADC buffer
-    ++buf_next;
-    buf_next &= BUF_NUM - 1;
-
-    // clear the interrupt request, ADC DMA using irq1
-    dma_hw->ints1 = dma_hw->ints1;
 }
 
 static const uint8_t cdt_pins[] = {
@@ -191,7 +187,8 @@ void receive_init(void)
     irq_set_enabled(DMA_IRQ_1, true);
 
     // initialize semaphore
-    sem_init(&sem, 0, BUF_NUM);
+    produced = consumed = 0;
+    last_processed_us = time_us_64();
 
     //tnc_init();
     //bell202_init();
@@ -205,21 +202,37 @@ void receive_init(void)
 
 void receive(void)
 {
-    static int buf_next = 0;
+
     static uint8_t port = 0;
 
-    // wait for ADC samples
-    if (!sem_acquire_timeout_ms(&sem, 0)) return;
+    // IRQ publishes completed blocks. Copy before processing, reserving the
+    // currently-written block and dropping old audio on overrun.
+    uint32_t irq = save_and_disable_interrupts();
+    uint32_t ready = produced;
+    if (ready == consumed) { restore_interrupts(irq); return; }
+    if ((uint32_t)(ready - consumed) >= BUF_NUM - 1) {
+        consumed = ready - 1;
+        ++overruns;
+        for (int j = 0; j < NUM_SLICERS; ++j) {
+            int16_t offset = tnc[0].slicer[j].offset;
+            memset(&tnc[0].slicer[j], 0, sizeof(slicer_t));
+            tnc[0].slicer[j].offset = offset;
+        }
+        tnc[0].dcd = tnc[0].led_on = 0;
+    }
+    memcpy(samples, buf[consumed & (BUF_NUM - 1)], sizeof(samples));
+    ++consumed;
+    restore_interrupts(irq);
 
 #ifdef BUSY_PIN
     gpio_put(BUSY_PIN, 1);
 #endif
 
-    ++__tnc_time; // advance 10ms timer
+    __tnc_time = (uint32_t)(time_us_64() / 10000); // wall clock, wraps after 497 days
 
     // process adc data
     for (int i = 0; i < BUF_LEN; i++) {
-        int val = buf[buf_next][i];
+        int val = samples[i];
         tnc_t *tp = &tnc[port];
 
         if (++port >= PORT_N) port = 0; // ADC ch round robin
@@ -237,9 +250,7 @@ void receive(void)
 
     }
 
-    // advance next buffer
-    ++buf_next;
-    buf_next &= BUF_NUM - 1;
+    last_processed_us = time_us_64();
 
 #ifdef BUSY_PIN
     gpio_put(BUSY_PIN, 0);

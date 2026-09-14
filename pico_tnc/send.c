@@ -25,6 +25,7 @@
 #include "tnc.h"
 #include "send.h"
 #include "ax25.h"
+#include "digipeat.h"
 
 //#include "wave_table.h"
 #include "wave_table.h"
@@ -55,9 +56,35 @@ static const int ptt_pins[] = {
 
 #define CAL_TIMEOUT (60 * 100)  // 60 sec
 
+// An independent timer IRQ drops PTT even if the TX DMA stops interrupting.
+// A latched fault stops watchdog feeding; reboot restores the peripheral state.
+#define TX_MAX_US 10000000u
+#define TX_QUEUE_MAX_US 5000000ull
+static volatile bool tx_fault;
+static struct repeating_timer tx_guard_timer;
+
+bool send_healthy(void) { return !tx_fault; }
+
+static bool tx_guard(struct repeating_timer *timer)
+{
+    for (int i = 0; i < PORT_N; ++i) {
+        tnc_t *tp = &tnc[i];
+        if (tp->busy && (uint32_t)(time_us_32() - tp->tx_started_us) >= TX_MAX_US) {
+            gpio_put(tp->ptt_pin, 0);
+            tx_fault = true;
+        }
+    }
+    return true;
+}
+
 static void __isr dma_handler(void)
 {
     uint32_t int_status = dma_hw->ints0;
+    if (tx_fault) {
+        for (int i = 0; i < PORT_N; ++i) gpio_put(tnc[i].ptt_pin, 0);
+        dma_hw->ints0 = int_status;
+        return;
+    }
     uint32_t own_mask = 0;
 
     for (int i = 0; i < PORT_N; i++) {
@@ -87,7 +114,8 @@ static void __isr dma_handler(void)
 
 static void send_start(tnc_t *tp)
 {
-    if (!tp->busy) {
+    if (!tp->busy && !tx_fault) {
+        tp->tx_started_us = time_us_32();
         gpio_put(tp->ptt_pin, 1); // PTT on
         tp->busy = true;
         //printf("restart dma, ctrl = %08x, port = %d\n", dma_hw->ch[tp->data_chan].ctrl_trig, tp->port);
@@ -97,11 +125,15 @@ static void send_start(tnc_t *tp)
 
 static bool send_packet_flags(tnc_t *tp, uint8_t *data, int len, uint8_t flags)
 {
+    if (tx_fault || !ax25_frame_valid(data, len)) return false;
     int length = len + 2; // fcs 2 byte
     uint8_t byte;
 
     // Queue layout per packet: [flags][len_lo][len_hi][data...][fcs_lo][fcs_hi]
     if (send_queue_free(tp) < length + 3) return false; // queue has no room
+
+    if (queue_is_empty(&tp->send_queue) && tp->send_state == SP_IDLE)
+        tp->queue_started_us = time_us_64();
 
     byte = flags;
     queue_try_add(&tp->send_queue, &byte);
@@ -193,7 +225,8 @@ int send_byte(tnc_t *tp, uint8_t data, bool bit_stuff)
         uint32_t const **block = &tp->dma_blocks[tp->next][0];
         if (queue_try_add(&tp->dac_queue, &block)) {
 #if 0
-            if (!tp->busy) {
+            if (!tp->busy && !tx_fault) {
+        tp->tx_started_us = time_us_32();
                 tp->busy = true;
                 dma_channel_set_read_addr(tp->data_chan, NULL, true);
                 //printf("restart dma, ctrl = %08x, port = %d\n", dma_hw->ch[tp->data_chan].ctrl_trig, tp->port);
@@ -311,6 +344,8 @@ void send_init(void)
     irq_add_shared_handler(DMA_IRQ_0, dma_handler, PICO_SHARED_IRQ_HANDLER_DEFAULT_ORDER_PRIORITY);
     irq_set_enabled(DMA_IRQ_0, true);
 
+    if (!add_repeating_timer_ms(-10, tx_guard, NULL, &tx_guard_timer)) tx_fault = true;
+
     // ISR time measurement
     gpio_init(ISR_PIN);
     gpio_set_dir(ISR_PIN, true);
@@ -334,12 +369,18 @@ int send_queue_free(tnc_t *tp)
 void send(void)
 {
     uint8_t data;
+    if (tx_fault) return;
 
     tnc_t *tp = &tnc[0];
     while (tp < &tnc[PORT_N]) {
 
+        if (!tp->busy && time_us_64() - tp->queue_started_us > TX_QUEUE_MAX_US &&
+            tp->send_state <= SP_WAIT_SLOTTIME && !queue_is_empty(&tp->send_queue)) {
+            tp->send_state = SP_ERROR;
+        }
         switch (tp->send_state) {
             case SP_IDLE:
+                if (tp->busy) break; // allow DMA to release PTT between frames
                 //printf("(%d) send: SP_IDEL\n", tnc_time());
                 if (!queue_is_empty(&tp->send_queue)) {
                     tp->send_state = SP_READ_FLAGS;
@@ -424,6 +465,12 @@ void send(void)
                 }
                 // read packet length high byte
                 tp->send_len += data << 8;
+                if (tp->send_len < 17 || tp->send_len > AX25_MAX_FRAME_LEN + 2 ||
+                    queue_get_level(&tp->send_queue) < tp->send_len) {
+                    gpio_put(tp->ptt_pin, 0);
+                    tx_fault = true;
+                    return;
+                }
                 //printf("(%d) send: SP_DATA_START, len = %d\n", tnc_time(), tp->send_len);
                 if (!queue_try_remove(&tp->send_queue, &data)) {
                     printf("send: send_queue underrun, data(1)\n");
@@ -454,25 +501,24 @@ void send(void)
                 continue;
 
             case SP_SEND_TRAILING_FLAG:
-                // Post-data path: emit one inter-packet HDLC flag.  If
-                // another packet is queued, chain into it (reuse the
-                // already-on PTT) by reading its per-packet flag byte
-                // before SP_DATA_START reads the length.
+                // Complete the frame and let DMA drain/release PTT. The
+                // next frame must re-enter channel access through SP_IDLE.
                 while (tp->send_len > 0 && send_byte(tp, AX25_FLAG, false)) {
                     --tp->send_len;
                 }
                 if (tp->send_len > 0) break;
                 tp->cnt_one = 0;
-                if (!queue_is_empty(&tp->send_queue)) {
-                    uint8_t flag_byte;
-                    if (queue_try_remove(&tp->send_queue, &flag_byte)) {
-                        tp->send_flags = flag_byte;
-                        tp->send_state = SP_DATA_START;
-                        continue;
-                    }
-                }
+                send_start(tp); // also starts a short frame whose DAC queue never filled
                 tp->send_state = SP_IDLE;
                 break;
+
+            default:
+                gpio_put(tp->ptt_pin, 0);
+                tx_fault = true;
+                return;
+
+            case SP_CALIBRATE_OFF:
+                break; // completed by calibrate() in main
 
             case SP_ERROR:
                 //printf("(%d) send: SP_ERROR\n", tnc_time());

@@ -49,3 +49,5 @@ bool send_packet(tnc_t *tp, uint8_t *data, int len);
 // APRS Protocol Reference §3 / WB2OSZ §3.2.1 (digis rely on FM capture, not
 // random backoff).  Not appropriate for KISS/AGWPE-originated traffic.
 bool send_packet_now(tnc_t *tp, uint8_t *data, int len);
+
+bool send_healthy(void);

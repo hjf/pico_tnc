@@ -32,89 +32,27 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ax25.h"
 #include "send.h"
 
-#define AX25_ADDR_LEN 7
-
-static uint8_t addr[AX25_ADDR_LEN];
-
-#define CON_PID_LEN 2
-static const uint8_t con_pid[CON_PID_LEN] = { 0x03, 0xf0 }; // control, PID
+#include <string.h>
+#include "digipeat.h"
 
 void send_unproto(tnc_t *tp, uint8_t *data, int len)
 {
-    uint8_t byte;
-    uint32_t fcs;
-    int repeaters = 0;
-    int i;
-
-    if (!param.mycall.call[0]) return;      // no mycall
-    if (!param.unproto[0].call[0]) return;  // no unproto
-
-    int pkt_len = AX25_ADDR_LEN * 2; // dst + src addr
-
-    // count repeaters
-    for (int i = 1; i < UNPROTO_N; i++) {
-        if (!param.unproto[i].call[0]) break;
-        pkt_len += AX25_ADDR_LEN;
-        repeaters++;
+    if (!data || len < 0 || len > AX25_MAX_INFO_LEN) return;
+    if (!ax25_callsign_valid(&param.mycall) || !ax25_callsign_valid(&param.unproto[0])) return;
+    uint8_t frame[AX25_MAX_FRAME_LEN];
+    ax25_mkax25addr(frame, &param.unproto[0]);
+    frame[6] |= 0x80;
+    ax25_mkax25addr(frame+7, &param.mycall);
+    int n = 14;
+    for (int i = 1; i < UNPROTO_N && param.unproto[i].call[0]; ++i) {
+        if (!ax25_callsign_valid(&param.unproto[i])) return;
+        ax25_mkax25addr(frame+n, &param.unproto[i]);
+        n += 7;
     }
-
-    pkt_len += 2 + len + 2; // CONTL + PID + info + FCS
-
-    if (send_queue_free(tp) < pkt_len + 3) return;
-
-    // per-packet flags (none — UNPROTO uses normal p-persistence CSMA)
-    byte = 0;
-    queue_try_add(&tp->send_queue, &byte);
-
-    // packet length
-    byte = pkt_len;
-    queue_try_add(&tp->send_queue, &byte);
-    byte = pkt_len >> 8;
-    queue_try_add(&tp->send_queue, &byte);
-
-    // dst addr
-    ax25_mkax25addr(addr, &param.unproto[0]);
-    addr[6] |= 0x80;                        // set C bit for AX.25 Ver2.2 Command
-    for (i = 0; i < AX25_ADDR_LEN; i++) {
-        queue_try_add(&tp->send_queue, &addr[i]);
-    }
-    fcs = ax25_fcs(0, addr, AX25_ADDR_LEN);
-
-    // src addr
-    ax25_mkax25addr(addr, &param.mycall);
-    if (repeaters == 0) addr[6] |= 1;    // set address extension bit, if no repeaters
-    for (i = 0; i < AX25_ADDR_LEN; i++) {
-        queue_try_add(&tp->send_queue, &addr[i]);
-    }
-    fcs = ax25_fcs(fcs, addr, AX25_ADDR_LEN);
-    
-    // repeaters
-    for (int j = 1; j <= repeaters; j++) {
-        if (param.unproto[j].call[0]) {
-            ax25_mkax25addr(addr, &param.unproto[j]);
-            if (j == repeaters) addr[6] |= 1; // set address extension bit, if last repeater
-            for (i = 0; i < AX25_ADDR_LEN; i++) {
-                queue_try_add(&tp->send_queue, &addr[i]);
-            }
-            fcs = ax25_fcs(fcs, addr, AX25_ADDR_LEN);
-        }
-    }
-
-    // control and PID
-    for (i = 0; i < CON_PID_LEN; i++) {
-        queue_try_add(&tp->send_queue, &con_pid[i]);
-    }
-    fcs = ax25_fcs(fcs, con_pid, CON_PID_LEN);
-
-    // info
-    for (i = 0; i < len; i++) {
-        queue_try_add(&tp->send_queue, &data[i]);
-    }
-    fcs = ax25_fcs(fcs, data, len);
-
-    // fcs
-    byte = fcs;
-    queue_try_add(&tp->send_queue, &byte);
-    byte = fcs >> 8;
-    queue_try_add(&tp->send_queue, &byte);
+    frame[n-1] |= 1;
+    frame[n++] = 3;
+    frame[n++] = 0xf0;
+    memcpy(frame+n, data, len);
+    n += len;
+    if (send_packet(tp, frame, n)) digipeat_record_rx(frame, n);
 }

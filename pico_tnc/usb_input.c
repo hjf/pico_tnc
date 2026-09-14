@@ -40,7 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 void usb_input(void)
 {
     int ch;
-    while ((ch = getchar_timeout_us(0)) >= 0) {
+    for (int budget = 0; budget < 64 && (ch = getchar_timeout_us(0)) >= 0; ++budget) {
         tty_input(&tty[TTY_USB], ch);
     }
 }

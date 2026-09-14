@@ -64,7 +64,7 @@ static queue_t uart_queue;
 void serial_init(void)
 {
     queue_init(&uart_queue, sizeof(uint8_t), UART_QUEUE_LEN);
-    assert(uart_queue != NULL);
+
 
 #if PICO_TNC_TERMINAL_UART_ENABLE
     uint baud = uart_init(uart0, UART_BAUDRATE);
@@ -75,6 +75,7 @@ void serial_init(void)
 
     gpio_set_function(0, GPIO_FUNC_UART);
     gpio_set_function(1, GPIO_FUNC_UART);
+    gpio_pull_up(1);
 #endif
 
 #ifdef GPS_ENABLE
@@ -85,6 +86,7 @@ void serial_init(void)
 
     uart_set_fifo_enabled(GPS_UART, true);
     gpio_set_function(PICO_TNC_GPS_RX_PIN, GPIO_FUNC_UART);
+    gpio_pull_up(PICO_TNC_GPS_RX_PIN);
 #endif
 }
 
@@ -107,7 +109,7 @@ void serial_output(void)
 #if PICO_TNC_TERMINAL_UART_ENABLE
     if (queue_is_empty(&uart_queue)) return;
 
-    while (uart_is_writable(uart0)) {
+    for (int budget = 0; budget < 64 && uart_is_writable(uart0); ++budget) {
         uint8_t ch;
 
         if (!queue_try_remove(&uart_queue, &ch)) break;
@@ -119,14 +121,14 @@ void serial_output(void)
 void serial_input(void)
 {
 #ifdef GPS_ENABLE
-    while (uart_is_readable(GPS_UART)) {
+    for (int budget = 0; budget < 32 && uart_is_readable(GPS_UART); ++budget) {
         int ch = uart_getc(GPS_UART);
         gps_input(ch);
     }
 #endif
 
 #if PICO_TNC_TERMINAL_UART_ENABLE
-    while (uart_is_readable(uart0)) {
+    for (int budget = 0; budget < 64 && uart_is_readable(uart0); ++budget) {
 
         int ch = uart_getc(uart0);
         tty_input(&tty[TTY_UART0], ch);

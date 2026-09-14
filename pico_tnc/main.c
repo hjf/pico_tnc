@@ -69,6 +69,11 @@ static const uint8_t greeting[] =
 
 int main()
 {
+    // Establish inactive PTT before USB, allocation, or configuration reads.
+    gpio_init(PICO_TNC_PTT_PIN);
+    gpio_put(PICO_TNC_PTT_PIN, 0);
+    gpio_set_dir(PICO_TNC_PTT_PIN, GPIO_OUT);
+    watchdog_enable(1000, true);
     stdio_init_all();
 
     if (watchdog_caused_reboot()) {
@@ -115,7 +120,7 @@ int main()
     while (1) {
 
         // update watchdog timer
-        watchdog_update();
+        __tnc_time = (uint32_t)(time_us_64() / 10000);
 
 #if 0
         // advance tnc time
@@ -161,6 +166,8 @@ int main()
 #ifdef BUSY_PIN
 //        gpio_put(BUSY_PIN, 0);
 #endif
+        if (receive_healthy() && send_healthy()) watchdog_update();
+
         // wait small time
         __wfi();
 
