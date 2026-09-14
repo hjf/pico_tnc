@@ -60,3 +60,10 @@ set(PICO_TNC_PIN_COMPILE_DEFINITIONS
     PICO_TNC_PWM_PIN=${PICO_TNC_PWM_PIN}
     PICO_TNC_TERMINAL_UART_ENABLE=$<BOOL:${PICO_TNC_TERMINAL_UART_ENABLE}>
 )
+# ADC, diagnostic pins, supply control, board LED and flash pins are owned elsewhere.
+set(_pico_tnc_reserved_pins 15 22 23 24 25 26 27 28 29)
+foreach(_pin_var PICO_TNC_GPS_RX_PIN PICO_TNC_PTT_PIN PICO_TNC_PWM_PIN)
+    if(${${_pin_var}} IN_LIST _pico_tnc_reserved_pins)
+        message(FATAL_ERROR "${_pin_var} conflicts with a board/firmware-owned GPIO")
+    endif()
+endforeach()
