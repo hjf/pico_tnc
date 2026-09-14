@@ -40,6 +40,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 static uint8_t gps_buf[GPS_LEN + 1];
 static int gps_idx = 0;
+static bool gps_overflow;
+static uint32_t last_fix;
 static bool position_valid = false;
 static bool motion_valid = false;
 static uint16_t course_degrees = 0;
@@ -61,7 +63,7 @@ static bool checksum_valid(char *sentence)
   if (sentence[0] != '$') return false;
 
   char *asterisk = strchr(sentence, '*');
-  if (!asterisk || hex_value(asterisk[1]) < 0 || hex_value(asterisk[2]) < 0) return false;
+  if (!asterisk || strlen(asterisk) < 3 || hex_value(asterisk[1]) < 0 || hex_value(asterisk[2]) < 0) return false;
 
   uint8_t checksum = 0;
   for (char *p = sentence + 1; p < asterisk; p++) checksum ^= (uint8_t)*p;
@@ -220,16 +222,17 @@ static void gps_update_position(char *sentence)
   param.beacon_lat_e7 = lat;
   param.beacon_lon_e7 = lon;
   position_valid = true;
+  last_fix = tnc_time();
 }
 
 bool gps_position_valid(void)
 {
-  return position_valid;
+  return position_valid && (uint32_t)(tnc_time() - last_fix) < 3000;
 }
 
 bool gps_motion_valid(uint16_t *course, uint16_t *speed)
 {
-  if (!motion_valid) return false;
+  if (!motion_valid || !gps_position_valid()) return false;
   *course = course_degrees;
   *speed = speed_knots;
   return true;
@@ -248,13 +251,14 @@ void gps_input(int ch)
     usb_multi_write_char(USB_CDC_GPS, (uint8_t)ch);
 #endif
 
-    if (ch == DOLLAR) gps_idx = 0;
+    if (ch == DOLLAR) { gps_idx = 0; gps_overflow = false; }
 
     if (gps_idx < GPS_LEN) gps_buf[gps_idx++] = ch;
+    else gps_overflow = true;
 
     if (ch == LF) {
     gps_buf[gps_idx] = '\0';
-    gps_update_position((char *)gps_buf);
+    if (!gps_overflow) gps_update_position((char *)gps_buf);
         gps_idx = 0;
     }
 }

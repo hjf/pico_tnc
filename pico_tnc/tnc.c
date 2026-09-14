@@ -42,19 +42,15 @@ tnc_t tnc[PORT_N];
 #define DIGI_ENABLE 0
 #endif
 
-typedef struct LEGACY_TNC_PARAM {
-    callsign_t mycall;
-    callsign_t myalias;
-    callsign_t unproto[UNPROTO_N];
-    uint8_t btext[BTEXT_LEN + 1];
-    uint8_t txdelay;
-    uint8_t gps;
-    uint8_t mon;
-    uint8_t digi;
-    uint8_t beacon;
-    uint8_t trace;
-    uint8_t echo;
-} legacy_param_t;
+#ifndef DIGI_MYCALL
+#define DIGI_MYCALL ""
+#endif
+#ifndef DIGI_PATH
+#define DIGI_PATH "WIDE1-1"
+#endif
+#ifndef DIGI_HOLDOFF_MS
+#define DIGI_HOLDOFF_MS 1500
+#endif
 
 param_t param;
 
@@ -68,43 +64,68 @@ static void param_set_defaults(void)
         .txdelay = 100,
         .echo = 1,
         .digi = DIGI_ENABLE,
-        .digi_path = "WIDE1-1",
-        .digi_holdoff_ms = 1500,
+        .digi_path = DIGI_PATH,
+        .digi_holdoff_ms = DIGI_HOLDOFF_MS,
         .beacon_symbol_table = '/',
         .beacon_symbol_code = '#',
     };
 }
 
-static void param_read(void)
+// Blank/corrupt storage uses reviewed build defaults; NOCALL never enables RF.
+static void default_call(void)
 {
-    uint32_t stored_magic = 0;
-    param_set_defaults();
-
-    if (!flash_read(&stored_magic, sizeof(stored_magic))) return;
-
-    if (stored_magic == PARAM_FORMAT_MAGIC) {
-        param_t stored;
-        if (flash_read(&stored, sizeof(stored))) param = stored;
+    const char *p = DIGI_MYCALL;
+    callsign_t c = { .call = {' ', ' ', ' ', ' ', ' ', ' '} };
+    int i = 0;
+    while (*p && *p != '-' && i < 6) c.call[i++] = *p++;
+    if (*p == '-') {
+        ++p;
+        if (*p < '0' || *p > '9') return;
+        unsigned ssid = 0;
+        while (*p >= '0' && *p <= '9') {
+            ssid = ssid * 10 + (*p++ - '0');
+            if (ssid > 15) return;
+        }
+        c.ssid = ssid;
+    }
+    if (*p || !ax25_callsign_valid(&c) || !memcmp(c.call, "NOCALL", 6)) {
+        param.digi = 0;
         return;
     }
+    param.mycall = c;
+}
 
-    legacy_param_t legacy;
-    if (!flash_read(&legacy, sizeof(legacy))) return;
-    param.mycall = legacy.mycall;
-    param.myalias = legacy.myalias;
-    memcpy(param.unproto, legacy.unproto, sizeof(legacy.unproto));
-    if (!param.unproto[0].call[0]) {
-        memcpy(param.unproto[0].call, "APRS  ", sizeof(param.unproto[0].call));
-        param.unproto[0].ssid = 0;
+static bool param_valid(const param_t *p)
+{
+    if (p->format_magic != PARAM_FORMAT_MAGIC ||
+        !memchr(p->btext, 0, sizeof(p->btext)) ||
+        !memchr(p->digi_path, 0, sizeof(p->digi_path)) ||
+        !digipeat_path_valid(p->digi_path) || p->digi_holdoff_ms > 5000 ||
+        p->beacon > 60 || p->digi > 1 || p->echo > 1 || p->mon > MON_OFF || p->gps > 2 ||
+        p->trace > 2 || p->txdelay > 200 || p->beacon_position_set > BEACON_POSITION_GPS ||
+        p->beacon_lat_e7 < -900000000 || p->beacon_lat_e7 > 900000000 ||
+        p->beacon_lon_e7 < -1800000000 || p->beacon_lon_e7 > 1800000000 ||
+        p->beacon_symbol_code < '!' || p->beacon_symbol_code > '~' ||
+        !(p->beacon_symbol_table == '/' || p->beacon_symbol_table == '\\' ||
+          (p->beacon_symbol_table >= '0' && p->beacon_symbol_table <= '9') ||
+          (p->beacon_symbol_table >= 'A' && p->beacon_symbol_table <= 'Z'))) return false;
+    if (p->mycall.call[0] && !ax25_callsign_valid(&p->mycall)) return false;
+    if (p->myalias.call[0] && !ax25_callsign_valid(&p->myalias)) return false;
+    for (int i = 0; i < UNPROTO_N; ++i)
+        if (p->unproto[i].call[0] && !ax25_callsign_valid(&p->unproto[i])) return false;
+    return true;
+}
+
+static void param_read(void)
+{
+    param_set_defaults();
+    default_call();
+    param_t stored;
+    if (flash_read(&stored, sizeof(stored)) && param_valid(&stored)) param = stored;
+    if (!ax25_callsign_valid(&param.mycall) || !memcmp(param.mycall.call, "NOCALL", 6)) {
+        param.digi = param.beacon = 0;
+        memset(&param.mycall, 0, sizeof(param.mycall));
     }
-    memcpy(param.btext, legacy.btext, sizeof(legacy.btext));
-    param.txdelay = legacy.txdelay;
-    param.gps = legacy.gps;
-    param.mon = legacy.mon;
-    param.digi = legacy.digi;
-    param.beacon = legacy.beacon;
-    param.trace = legacy.trace;
-    param.echo = legacy.echo;
 }
 
 void tnc_init(void)

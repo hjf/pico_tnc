@@ -215,7 +215,7 @@ void tty_input(tty_t *ttyp, int ch)
 
         case CR:
             if (param.echo) tty_write_str(ttyp, "\r\n");
-            if (ttyp->cmd_idx > 0) {
+            if (ttyp->cmd_idx > 0 && !ttyp->cmd_overflow) {
                 ttyp->cmd_buf[ttyp->cmd_idx] = '\0';
                 if (converse_mode) {
                     send_unproto(&tnc[CONVERSE_PORT], ttyp->cmd_buf, ttyp->cmd_idx); // send UI packet
@@ -225,6 +225,7 @@ void tty_input(tty_t *ttyp, int ch)
             }
             if (!(converse_mode | calibrate_mode)) tty_write_str(ttyp, "cmd: ");
             ttyp->cmd_idx = 0;
+            ttyp->cmd_overflow = false;
             break;
 
         case CTRL_C:
@@ -233,12 +234,14 @@ void tty_input(tty_t *ttyp, int ch)
             }
             tty_write_str(ttyp, "\r\ncmd: ");
             ttyp->cmd_idx = 0;
+            ttyp->cmd_overflow = false;
             break;
 
         default:
             if ((ch >= ' ' && ch <= '~') && ttyp->cmd_idx < CMD_BUF_LEN) {
                 ttyp->cmd_buf[ttyp->cmd_idx++] = ch;
             } else {
+                if (ttyp->cmd_idx >= CMD_BUF_LEN) ttyp->cmd_overflow = true;
                 ch = BELL;
             }
             if (param.echo) tty_write_char(ttyp, ch);

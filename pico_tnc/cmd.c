@@ -115,7 +115,7 @@ static uint8_t *read_call(uint8_t *buf, callsign_t *c)
     int state = CALL;
     bool error = false;
 
-    cs.call[i] = '\0';
+    cs.call[0] = '\0';
     for (i = 1; i < 6; i++) cs.call[i] = ' ';
     cs.ssid = 0;
 
@@ -176,7 +176,7 @@ static uint8_t *read_call(uint8_t *buf, callsign_t *c)
         }
     }
 
-    if (cs.ssid > 15) error = true;
+    if (cs.ssid > 15 || j == 0 || state == SSID1) error = true;
 
     if (error) return NULL;
 
@@ -523,22 +523,23 @@ static bool cmd_beacon(tty_t *ttyp, uint8_t *buf, int len)
         }
 
         if (!strncasecmp(buf, "NOW", 3)) {
+            if (PICO_TNC_STANDALONE) return false;
             beacon_now();
             beacon_reset();
             return true;
         }
 
-        while (toupper(buf[i]) == *s) {
+        while (*s && buf[i] && toupper(buf[i]) == *s) {
             i++;
             s++;
         }
 
-        if (!buf[i] || buf[i] != ' ') return false;
+        if (*s || !buf[i] || buf[i] != ' ') return false;
 
-        int r, t;
-        r = sscanf(&buf[i], "%d", &t);
-
-        if (r != 1 || (t < 0 || t > 60)) return false;
+        char *end;
+        long t = strtol((char *)&buf[i], &end, 10);
+        while (*end == ' ') ++end;
+        if (end == (char *)&buf[i] || *end || t < 0 || t > 60) return false;
 
         param.beacon = t;
         beacon_reset();     // beacon timer reset
@@ -684,8 +685,16 @@ static bool cmd_perm(tty_t *ttyp, uint8_t *buf, int len)
 {
     //tty_write("PERM\r\n", 6);
 
+    static uint64_t last_write;
+    static bool written;
+    if (written && time_us_64() - last_write < 30000000ull) return false;
+    // Flash stalls IRQ service: never write while RF audio is queued or keyed.
+    if (tnc[0].busy || tnc[0].send_state != SP_IDLE ||
+        !queue_is_empty(&tnc[0].send_queue) || !queue_is_empty(&tnc[0].dac_queue)) return false;
     receive_off(); // stop ADC free running
 
+    written = true;
+    last_write = time_us_64();
     bool ret = flash_write(&param, sizeof(param));
 
     receive_on();
@@ -753,9 +762,10 @@ static bool cmd_txdelay(tty_t *ttyp, uint8_t *buf, int len)
 {
     if (buf && buf[0]) {
         
-        int t = atoi(buf);
-
-        if (t <= 0 || t > 200) return false;
+        char *end;
+        long t = strtol((char *)buf, &end, 10);
+        while (*end == ' ') ++end;
+        if (*end || t <= 0 || t > 200) return false;
 
         param.txdelay = t;
 
@@ -776,8 +786,9 @@ static bool cmd_txdelay(tty_t *ttyp, uint8_t *buf, int len)
 static bool cmd_calibrate(tty_t *ttyp, uint8_t *buf, int len)
 {
     //tty_write_str(ttyp, "CALIBRATE\r\n");
+    if (PICO_TNC_STANDALONE) return false;
     tnc_t *tp = &tnc[0];
-    if (tp->send_state != SP_IDLE) {
+    if (tp->send_state != SP_IDLE || tp->busy) {
         tty_write_str(ttyp, "Transmitter busy\r\n");
         return false;
     }
@@ -807,6 +818,7 @@ void calibrate(void)
 static bool cmd_converse(tty_t *ttyp, uint8_t *buf, int len)
 {
     //tty_write("CONVERSE\r\n", 10);
+    if (PICO_TNC_STANDALONE) return false;
     converse_mode = true;
     tty_write_str(ttyp, "***  Converse Mode, ctl C to Exit\r\n");
     return true;
