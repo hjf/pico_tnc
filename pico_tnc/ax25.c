@@ -72,9 +72,11 @@ int ax25_fcs(uint32_t crc, const uint8_t *data, int size)
 
     // wait for finish
     dma_channel_wait_for_finish_blocking(dma_chan);
+    uint32_t result = dma_hw->sniff_data >> 16;
+    dma_sniffer_disable();
     dma_channel_unclaim(dma_chan);
 
-    return dma_hw->sniff_data >> 16;
+    return result;
 }
 
 #else
@@ -128,18 +130,58 @@ void ax25_mkax25addr(uint8_t *addr, callsign_t *c)
     *s = (c->ssid << 1) | 0x60;
 }
 
+bool ax25_callsign_valid(const callsign_t *call)
+{
+    if (!call || call->ssid > 15) return false;
+    bool padding = false;
+    for (int i = 0; i < 6; ++i) {
+        unsigned char c = call->call[i];
+        if (c == ' ' && i > 0) padding = true;
+        else if (padding || !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
+    }
+    return true;
+}
+
+int ax25_control_offset(const uint8_t *packet, int len)
+{
+    if (!packet || len < 15 || len > AX25_MAX_FRAME_LEN) return -1;
+    bool unused = false;
+    for (int off = 0; off + 7 < len && off < 70; off += 7) {
+        callsign_t c;
+        for (int j = 0; j < 6; ++j) {
+            if (packet[off+j] & 1) return -1;
+            c.call[j] = packet[off+j] >> 1;
+        }
+        c.ssid = (packet[off+6] >> 1) & 15;
+        if (!ax25_callsign_valid(&c)) return -1;
+        // Reserved bits are ignored on receive for compatibility with older TNCs.
+        if (off >= 14) {
+            if (!(packet[off+6] & 0x80)) unused = true;
+            else if (unused) return -1; // repeated addresses must form a prefix
+        }
+        if (packet[off+6] & 1) return off >= 7 ? off+7 : -1;
+    }
+    return -1;
+}
+
+bool ax25_frame_valid(const uint8_t *packet, int len)
+{
+    int c = ax25_control_offset(packet, len);
+    if (c < 0) return false;
+    uint8_t ctrl = packet[c] & ~0x10; // P/F bit
+    if (!(ctrl & 1) || ctrl == 3) // I or UI: PID and bounded information
+        return len >= c+2 && len-c-2 <= AX25_MAX_INFO_LEN;
+    if ((ctrl & 3) == 1) // modulo-8 supervisory frames
+        return len == c+1 && (ctrl & 0x0f) != 0x0d;
+    // Known unnumbered controls; only XID/TEST carry information.
+    if (ctrl == 0xaf || ctrl == 0xe3) return len-c-1 <= AX25_MAX_INFO_LEN;
+    return len == c+1 && (ctrl == 0x2f || ctrl == 0x6f || ctrl == 0x43 ||
+                         ctrl == 0x63 || ctrl == 0x0f);
+}
+
 bool ax25_ui(uint8_t *packet, int len)
 {
-    int i;
-
-    i = AX25_ADDR_LEN - 1; // SSID
-    while (i < len) {
-        if (packet[i] & 1) break; // address extension bit
-        i += AX25_ADDR_LEN;
-    }
-    i++;
-
-    if (i + 2 > len) return false; // no control and  PID field
-
-    return packet[i] == 0x03 && packet[i+1] == 0xf0; // true if UI packet
+    int c = ax25_control_offset(packet, len);
+    return c >= 0 && len >= c+3 && len-c-2 <= AX25_MAX_INFO_LEN &&
+           packet[c] == 0x03 && packet[c+1] == 0xf0;
 }

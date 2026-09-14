@@ -36,11 +36,12 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len);
 bool digipeat_path_valid(const char *path);
 void digipeat_config_changed(void);
 
+// Returns true for a duplicate (or invalid frame), and cancels held repeats.
 // Records every valid received frame in the dedup table. Called from
 // decode.c output_packet() for all heard frames. `len` is the logical
 // packet length without trailing FCS. The hash excludes the digipath
 // so a wide-area digi's repeat matches its original.
-void digipeat_record_rx(const uint8_t *packet, int len);
+bool digipeat_record_rx(const uint8_t *packet, int len);
 
 // Records source callsigns of packets originating from local clients
 // (KISS/AGWPE/serial). RF packets addressed to these stations are

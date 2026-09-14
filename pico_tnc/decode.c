@@ -217,7 +217,7 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     int len = s->data_cnt;
     uint8_t *data = s->data;
 
-    if (len < MIN_LEN) return;
+    if (len < MIN_LEN || len > AX25_MAX_FRAME_LEN + 2) return;
 
     // FCS check
     if (ax25_fcs(0, data, len) != FCS_OK) {
@@ -248,6 +248,8 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     diag_fcs_ok_per_slicer[slicer_idx]++;
 #endif
 
+    if (!ax25_frame_valid(data, len - 2)) return;
+
     // Cross-slicer dedupe: another slicer may have already published the
     // same frame on its own end-of-frame within the past 1.5 s.
     if (dedup_check_insert(tp, data, len)) {
@@ -263,7 +265,7 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     // Record every heard frame in the digipeat dedup table BEFORE we
     // schedule a repeat — that way, a wide-area digi's later copy lands
     // on top of the same hash and suppresses our held-off TX.
-    digipeat_record_rx(data, len - 2);  // strip trailing FCS for hash
+    bool duplicate = digipeat_record_rx(data, len - 2);  // strip trailing FCS for hash
 
 #if PICO_TNC_PARENT_INTEGRATION
     agwpe_monitor_rf_packet(data, len);
@@ -275,7 +277,7 @@ static void output_packet(tnc_t *tp, slicer_t *s)
 #endif
 
     // digipeat
-    if (param.digi) digipeat(tp, data, len);
+    if (param.digi && !duplicate) digipeat(tp, data, len);
 
     for (int i = TTY_USB; i <= TTY_UART0; i++) {
         tty_t *ttyp = &tty[i];
@@ -354,54 +356,46 @@ static void dcd_recompute(tnc_t *tp)
 
 static void decode_bit_slicer(tnc_t *tp, slicer_t *s, int bit)
 {
-    s->flag <<= 1;
-    s->flag |= bit;
-
-    switch (s->state) {
-        case FLAG:
-	    if (s->flag == AX25_FLAG) { // found flag
-	        s->state = DATA;
-	        s->data_cnt = 0;
-	        s->data_bit_cnt = 0;
-	        s->ui_seen = 0;
-	    }
-	    break;
-
-        case DATA:
-	    if ((s->flag & 0x3f) == 0x3f) { // AX.25 flag, end of packet, six continuous "1" bits
-	        output_packet(tp, s);
-	        s->state = FLAG;
-	        dcd_recompute(tp);
-	        break;
-	    }
-
-	    if ((s->flag & 0x3f) == 0x3e) break; // delete bit stuffing bit
-
-	    s->data_byte >>= 1;
-	    s->data_byte |= bit << 7;
-	    s->data_bit_cnt++;
-	    if (s->data_bit_cnt >= 8) {
-	        if (s->data_cnt < DATA_LEN) s->data[s->data_cnt++] = s->data_byte;
-            else {
-                printf("packet too long > %d\n", s->data_cnt);
-                s->state = FLAG;
-                dcd_recompute(tp);
-                break;
-            }
-	        s->data_bit_cnt = 0;
-	        // A byte successfully decoded in DATA state — a frame is being
-	        // received. Assert DCD on the first byte (preamble is past). The
-	        // LED only follows the UI-control-byte gate, which arduino_tnc
-	        // showed is a reliable "real AX.25 frame" indicator.
-	        s->dcd_last_byte_time = tnc_time();
-	        if (!tp->dcd) dcd_set(tp, 1);
-	        if (!s->ui_seen &&
-	            s->data_byte == AX25_UI_CONTROL &&
-	            s->data_cnt > AX25_MIN_ADDR_BYTES) {
-	            s->ui_seen = 1;
-	            if (!tp->led_on) led_set(tp, 1);
-	        }
-	    }
+    unsigned oldest = (s->flag >> 6) & 1;
+    s->flag = (uint8_t)((s->flag << 1) | (bit & 1));
+    if (s->raw_count >= 7 && s->flag == AX25_FLAG) {
+        // Full flag, including its final zero. An abort is never a frame end.
+        if (s->state == DATA && s->data_bit_cnt == 0) output_packet(tp, s);
+        s->state = DATA;
+        s->data_cnt = s->data_bit_cnt = s->data_byte = 0;
+        s->raw_count = s->ones = s->ui_seen = 0;
+        dcd_recompute(tp);
+        return;
+    }
+    if ((s->flag & 0x7f) == 0x7f) {
+        s->state = FLAG;
+        s->raw_count = 0;
+        dcd_recompute(tp);
+        return;
+    }
+    if (s->raw_count < 7) { ++s->raw_count; return; }
+    if (s->state != DATA) return;
+    // Keep seven raw bits pending so no part of a closing flag enters data.
+    if (s->ones == 5) {
+        s->ones = 0;
+        if (oldest) s->state = FLAG;
+        return;
+    }
+    s->ones = oldest ? s->ones + 1 : 0;
+    s->data_byte = (s->data_byte >> 1) | (oldest << 7);
+    if (++s->data_bit_cnt < 8) return;
+    if (s->data_cnt >= AX25_MAX_FRAME_LEN + 2) {
+        s->state = FLAG;
+        dcd_recompute(tp);
+        return;
+    }
+    s->data[s->data_cnt++] = s->data_byte;
+    s->data_bit_cnt = 0;
+    s->dcd_last_byte_time = tnc_time();
+    if (!tp->dcd) dcd_set(tp, 1);
+    if (!s->ui_seen && s->data_byte == AX25_UI_CONTROL && s->data_cnt > AX25_MIN_ADDR_BYTES) {
+        s->ui_seen = 1;
+        led_set(tp, 1);
     }
 }
 
@@ -428,7 +422,7 @@ static void decode2_slicer(tnc_t *tp, slicer_t *s, int val)
 {
     int32_t prev_pll = s->pll_counter >> 31; // compiler bug workaround
 
-    s->pll_counter += PLL_STEP;
+    s->pll_counter = (int32_t)((uint32_t)s->pll_counter + (uint32_t)PLL_STEP);
 
     if ((s->pll_counter >> 31) < prev_pll) { // overflow
 
@@ -469,7 +463,7 @@ void demodulator(tnc_t *tp, int adc)
     val = adc - (tp->avg + AVERAGE_MUL/2) / AVERAGE_MUL;
 
     // carrier detect
-    tp->cdt_lvl += (val * val * CDT_MUL - tp->cdt_lvl) >> CDT_SHIFT;
+    tp->cdt_lvl += (int32_t)(((int64_t)val * val * CDT_MUL - tp->cdt_lvl) >> CDT_SHIFT);
 
 #if 0
     static int count = 0;

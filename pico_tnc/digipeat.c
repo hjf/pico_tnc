@@ -236,6 +236,7 @@ static bool parse_one_alias(const char *start, const char *end, digi_alias_t *al
         for (const char *p = dash + 1; p < end; p++) {
             if (!isdigit((unsigned char)*p)) return false;
             ssid = ssid * 10 + (*p - '0');
+            if (ssid > 15) return false;
         }
         if (ssid < 1 || ssid > 15) return false;
     } else {
@@ -245,7 +246,12 @@ static bool parse_one_alias(const char *start, const char *end, digi_alias_t *al
 
     memset(alias->name, ' ', 6);
     for (int i = 0; i < name_len; i++) {
+        if (!isalnum((unsigned char)start[i])) return false;
         alias->name[i] = toupper((unsigned char)start[i]);
+    }
+    if (name_len >= 4 && !memcmp(alias->name, "WIDE", 4)) {
+        if (name_len != 5 || alias->name[4] < '1' || alias->name[4] > '7' ||
+            ssid > alias->name[4] - '0') return false;
     }
     alias->max_ssid = (uint8_t)ssid;
     return true;
@@ -294,11 +300,15 @@ static bool digi_parse_call(const char *in, callsign_t *out)
         in++;
         if (*in < '0' || *in > '9') return false;
         int ssid = 0;
-        while (*in >= '0' && *in <= '9') ssid = ssid * 10 + (*in++ - '0');
+        while (*in >= '0' && *in <= '9') {
+            ssid = ssid * 10 + (*in++ - '0');
+            if (ssid > 15) return false;
+        }
         if (ssid > 15) return false;
         out->ssid = (uint8_t)ssid;
     }
-    return true;
+    while (*in == ' ' || *in == '\t') in++;
+    return *in == '\0';
 }
 
 bool digipeat_call_str_is_local_origin(const char *call_str)
@@ -338,10 +348,11 @@ static void digipeat_init(void)
 #else
     digi_mycall = param.mycall;
     digi_myalias = param.myalias;
-    digi_active = digi_mycall.call[0] != '\0';
-    digi_has_myalias = digi_myalias.call[0] != '\0';
+    digi_active = ax25_callsign_valid(&digi_mycall);
+    digi_has_myalias = ax25_callsign_valid(&digi_myalias);
 #endif
 
+    if (!memcmp(digi_mycall.call, "NOCALL", 6)) digi_active = false;
     digi_init_done = true;
 
     if (digi_active) {
@@ -378,18 +389,6 @@ static bool alias_name_match(const char *name, const uint8_t *addr)
     return true;
 }
 
-// True if the address (shifted) is one of the well-known APRS-IS path tags:
-// TCPIP, TCPXX, NOGATE, RFONLY.  Used to suppress re-digipeating packets
-// that originated on the internet or are explicitly marked don't-RF.
-static bool is_path_tag(const uint8_t *addr)
-{
-    static const char *const tags[] = { "TCPIP ", "TCPXX ", "NOGATE", "RFONLY" };
-    for (int t = 0; t < 4; t++) {
-        if (alias_name_match(tags[t], addr)) return true;
-    }
-    return false;
-}
-
 // Returns index into digi_aliases on match, else -1.
 static int find_alias_match(const uint8_t *addr)
 {
@@ -411,11 +410,10 @@ static int find_alias_match(const uint8_t *addr)
 // digi's repeat differs from ours only in the path (decremented SSID,
 // set H-bit), and we want it to match.
 
-#define DIGI_DEDUP_SIZE 16
-// 8 s window: long enough to catch flood-back from a colocated wide-area digi
-// (arrives 1-3 s after our copy), short enough that APRS message retries
-// (typically >=30 s with backoff) get through and the remote can re-ACK.
-#define DIGI_DEDUP_TTL_MS 8000
+#define DIGI_DEDUP_SIZE 256
+// APRS network practice: suppress repeats for 30 seconds. 256 bounded entries
+// cover a 1200-baud channel even at the minimum accepted frame length.
+#define DIGI_DEDUP_TTL_MS 30000
 
 typedef struct {
     uint32_t hash;             // 0 means "slot empty"
@@ -424,38 +422,17 @@ typedef struct {
 
 static digi_dedup_entry_t digi_dedup[DIGI_DEDUP_SIZE];
 
-static int find_control_offset(const uint8_t *packet, int len)
-{
-    int i = AX25_ADDR_LEN - 1;  // SSID byte of dst
-    while (i < len) {
-        if (packet[i] & 1) return i + 1;  // control byte follows
-        i += AX25_ADDR_LEN;
-    }
-    return -1;
-}
-
-static uint32_t fnv1a(const uint8_t *data, int len)
-{
-    uint32_t h = 0x811c9dc5u;
-    for (int i = 0; i < len; i++) {
-        h ^= data[i];
-        h *= 0x01000193u;
-    }
-    return h;
-}
-
 // FCS is NOT included in the hash — caller may pass packet with or without it.
 static uint32_t digi_packet_hash(const uint8_t *packet, int len)
 {
-    int ctrl = find_control_offset(packet, len);
+    int ctrl = ax25_control_offset(packet, len);
     if (ctrl < 0 || ctrl >= len) return 0;
 
     uint32_t h = 0x811c9dc5u;
-    // dst addr (call only, 6 bytes) + src addr (7 bytes incl. SSID).
-    // Per WB2OSZ §4.2(a), destination SSID is excluded from the dedup key.
-    for (int i = 0; i < AX25_ADDR_LEN * 2 && i < len; i++) {
-        if (i == SSID_LOC) continue;  // destination SSID byte
-        h ^= packet[i];
+    // Calls + SSIDs define origin/destination; C/reserved/extension bits do not.
+    // This firmware does not implement legacy destination-SSID routing.
+    for (int i = 0; i < AX25_ADDR_LEN * 2; i++) {
+        h ^= (i == 6 || i == 13) ? packet[i] & 0x1e : packet[i];
         h *= 0x01000193u;
     }
     // control + PID + info (skip digipath)
@@ -510,12 +487,6 @@ static void digi_dedup_record_hash(uint32_t hash)
 
 // Public: called from decode.c output_packet() for every valid frame.
 // `len` is the logical packet length (NO trailing FCS).
-void digipeat_record_rx(const uint8_t *packet, int len)
-{
-    if (len < AX25_MIN_LEN) return;
-    digi_dedup_record_hash(digi_packet_hash(packet, len));
-}
-
 // ---- Pending-TX slots (hold-off) ---------------------------------------
 //
 // PORT_N=1 so file-scope storage is fine. If PORT_N grows these should
@@ -530,16 +501,29 @@ typedef struct {
     absolute_time_t scheduled_at;
     absolute_time_t fire_at;
     uint16_t len;                // bytes valid in frame[], no FCS
-    uint8_t frame[DATA_LEN];
+    uint8_t frame[AX25_MAX_FRAME_LEN];
 } digi_pending_t;
 
 static digi_pending_t digi_pending[DIGI_PENDING_SLOTS];
 
+bool digipeat_record_rx(const uint8_t *packet, int len)
+{
+    if (!ax25_frame_valid(packet, len)) return true;
+    uint32_t hash = digi_packet_hash(packet, len);
+    bool duplicate = !is_nil_time(digi_dedup_lookup(hash));
+    for (int i = 0; i < DIGI_PENDING_SLOTS; ++i) {
+        if (digi_pending[i].active && digi_pending[i].hash == hash) {
+            digi_pending[i].active = false;
+            duplicate = true;
+        }
+    }
+    digi_dedup_record_hash(hash);
+    return duplicate;
+}
+
 // Queue a frame in the pending pool.  Even with DIGI_HOLDOFF_MS=0 we route
-// through pending so digipeat_poll() can do the dedup re-check and the
-// channel-clear gate just before keying up — otherwise the frame would
-// block inside send_packet's CSMA state and we'd never re-evaluate dedup
-// while waiting for DCD to drop.
+// through pending so duplicate RX can cancel it while waiting for channel
+// clear. Once handed to TX, the separate TX batch expiry bounds queue age.
 static bool digi_schedule_tx(tnc_t *tp, const uint8_t *frame, int len)
 {
     uint32_t hash = digi_packet_hash(frame, len);
@@ -567,12 +551,8 @@ static bool digi_schedule_tx(tnc_t *tp, const uint8_t *frame, int len)
     return false;
 }
 
-// Called from the main loop.  Gating order:
-//   1. hold-off timer            (0 ms = immediate; positive = smart fill-in)
-//   2. dedup re-check            (suppress if another digi already covered)
-//   3. stale-packet timeout      (drop rather than block a slot forever)
-//   4. channel-clear gate        (wait for DCD low; closes the long-packet race)
-//   5. send_packet               (TXes promptly since DCD is currently low)
+// Called from main. Duplicate RX cancels pending slots in record_rx().
+// Remaining slots wait for holdoff/channel clear and expire after five seconds.
 void digipeat_poll(void)
 {
     absolute_time_t now = get_absolute_time();
@@ -580,19 +560,10 @@ void digipeat_poll(void)
     for (int i = 0; i < DIGI_PENDING_SLOTS; i++) {
         digi_pending_t *s = &digi_pending[i];
         if (!s->active) continue;
+        if (!param.digi || !digi_init_done) { s->active = false; continue; }
 
         // 1. Hold-off timer.
         if (absolute_time_diff_us(now, s->fire_at) > 0) continue;
-
-        // 2. Dedup re-check: did anyone retransmit this frame after we scheduled?
-        absolute_time_t last = digi_dedup_lookup(s->hash);
-        bool suppress = !is_nil_time(last)
-            && absolute_time_diff_us(s->scheduled_at, last) > 0;
-        if (suppress) {
-            printf("Digipeat: suppressed (another digi was first)\n");
-            s->active = false;
-            continue;
-        }
 
         // 3. Stale-packet timeout.  Channel may be permanently busy, or the
         //    frame may simply be too old to be worth digipeating.
@@ -631,8 +602,8 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
     if (!digi_init_done) digipeat_init();
     if (!digi_active) return;                         // DIGI_MYCALL unset
 
-    if (len < AX25_MIN_LEN) return;
-    if (!ax25_ui(packet, len)) return;
+    if (len < AX25_MIN_LEN + 2 || len > AX25_MAX_FRAME_LEN + 2) return;
+    if (!ax25_ui(packet, len - 2) || ax25_fcs(0, packet, len) != 0x0f47) return;
 
     // Never digipeat packets sourced by or addressed to ourselves — that
     // would loop our own retransmissions (which now carry digi_mycall in
@@ -640,31 +611,10 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
     if (ax25_callcmp(&digi_mycall, &packet[AX25_ADDR_LEN])) return;
     if (ax25_callcmp(&digi_mycall, packet)) return;
 
-    // If destination is a station recently seen originating locally
-    // (KISS/AGWPE), suppress RF digipeating to avoid duplex starvation.
-    if (digipeat_addr_is_local_origin(packet)) return;
-
-    // Suppress re-digipeating of APRS-IS-originated traffic.  A colocated
-    // wide-area iGate's gate-IS->RF wraps the original frame in a third-
-    // party '}' envelope; relaying it duplicates the wide-area's RF copy
-    // so listeners hear two of every IS-routed message.  Same logic also
-    // catches packets whose path carries TCPIP/TCPXX/NOGATE/RFONLY.
-    int control = find_control_offset(packet, len);
-    if (control < 0) return;
-    if (control + 2 < len - 2 && packet[control + 2] == '}') {
-        printf("Digipeat: skip third-party (} prefix)\n");
-        return;
-    }
-    for (int off = AX25_ADDR_LEN * 2; off + AX25_ADDR_LEN <= control; off += AX25_ADDR_LEN) {
-        if (is_path_tag(packet + off)) {
-            char name[7];
-            for (int i = 0; i < 6; i++) name[i] = (char)(packet[off + i] >> 1);
-            name[6] = '\0';
-            // trim trailing space (TCPIP / TCPXX are 5 chars)
-            for (int i = 5; i >= 0 && name[i] == ' '; i--) name[i] = '\0';
-            printf("Digipeat: skip path tag %s\n", name);
-            return;
-        }
+    int control = ax25_control_offset(packet, len - 2);
+    for (int off = 14; off < control; off += 7) {
+        // A station never repeats a packet it already relayed, even after expiry.
+        if ((packet[off+6] & H_BIT) && ax25_callcmp(&digi_mycall, packet+off)) return;
     }
 
     int offset = AX25_ADDR_LEN;                       // src addr
@@ -673,7 +623,7 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
     offset += AX25_ADDR_LEN;                          // first digi
     int digis = 1;                                    // 1-based slot index
 
-    while (digis <= MAX_DIGIPEATER && offset + AX25_ADDR_LEN <= len) {
+    while (digis <= MAX_DIGIPEATER && offset + AX25_ADDR_LEN <= control) {
 
         if (packet[offset + SSID_LOC] & H_BIT) {
             // already-used digi — step past
@@ -686,8 +636,8 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
         // build the outgoing frame in a stack buffer (length may grow by 7).
         int logical_len = len - 2;                    // drop FCS
         if (logical_len <= offset) return;
-        uint8_t out[DATA_LEN];
-        if (logical_len + AX25_ADDR_LEN > (int)sizeof(out)) return;
+        uint8_t out[AX25_MAX_FRAME_LEN];
+        if (logical_len > (int)sizeof(out)) return;
         int out_len;
 
         char mycall_str[10];
@@ -721,7 +671,7 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
             uint8_t old_n = (orig >> 1) & 0x0f;
             int name_n = strip_trailing_spaces(digi_aliases[idx].name);
 
-            if (old_n >= 2 && digis < MAX_DIGIPEATER) {
+            if (old_n >= 2 && control / 7 < 10 && logical_len + 7 <= AX25_MAX_FRAME_LEN) {
                 // §4.3.2(a): insert MYCALL (marked used) before WIDEn-N,
                 // decrement N on the alias.  Length grows by 7.
                 memcpy(out, packet, offset);
@@ -742,16 +692,7 @@ void digipeat(tnc_t *tp, uint8_t *packet, int len)
                        name_n, digi_aliases[idx].name, old_n - 1);
 
             } else if (old_n >= 2) {
-                // §4.3.2(a) fallback: path is at the 8-digi limit, can't
-                // insert MYCALL.  Just decrement N in place.
-                memcpy(out, packet, logical_len);
-                out[offset + SSID_LOC] = (orig & 0x61) | ((old_n - 1) << 1);
-                out_len = logical_len;
-                printf("Digipeat: relayed via %.*s-%u -> %.*s-%u (8-digi limit, no %s)\n",
-                       name_n, digi_aliases[idx].name, old_n,
-                       name_n, digi_aliases[idx].name, old_n - 1,
-                       mycall_str);
-
+                return; // no room to record this hop safely
             } else {
                 // §4.3.2(b): N=1.  Replace WIDEn-1 with MYCALL marked used,
                 // preserving the original end-of-address-field bit.  Length

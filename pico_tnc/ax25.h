@@ -27,6 +27,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 #include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #define AX25_ADDR_LEN 7
 
@@ -39,3 +41,10 @@ int ax25_fcs(uint32_t crc, const uint8_t const *data, int size);
 bool ax25_callcmp(callsign_t *c, uint8_t *addr);
 void ax25_mkax25addr(uint8_t *addr, callsign_t *c);
 bool ax25_ui(uint8_t *packet, int len);
+
+// Lengths exclude FCS. Standard AX.25 information limit is 256 bytes.
+#define AX25_MAX_INFO_LEN 256
+#define AX25_MAX_FRAME_LEN (10 * AX25_ADDR_LEN + 2 + AX25_MAX_INFO_LEN)
+int ax25_control_offset(const uint8_t *packet, int len);
+bool ax25_frame_valid(const uint8_t *packet, int len);
+bool ax25_callsign_valid(const callsign_t *call);

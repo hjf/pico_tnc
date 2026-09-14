@@ -12,6 +12,10 @@
 //#include "cmd.h"
 
 // number of ports
+#ifndef PICO_TNC_STANDALONE
+#define PICO_TNC_STANDALONE 0
+#endif
+
 #define PORT_N 1    // number of ports, 1..3
 
 #define BAUD_RATE 1200
@@ -50,7 +54,7 @@
 // often produce the same garbled bytes for an impossible-to-decode frame —
 // the fix-bits attempts ring suppresses redundant inner-loop runs across
 // slicers in a 1.5 s window.
-#define ENABLE_FIXBITS  1
+#define ENABLE_FIXBITS  0
 #define FIXBITS_RING    4
 
 #define CONTROL_N 10
@@ -100,6 +104,8 @@ typedef struct SLICER {
     int32_t  pll_counter;      // DireWolf PLL phase accumulator
     uint8_t  nrzi;             // last raw bit for NRZI XOR
     uint8_t  state;            // FLAG / DATA
+    uint8_t  raw_count;       // delayed raw bits, excludes complete flags
+    uint8_t  ones;            // HDLC destuff state
     uint8_t  flag;             // 8-bit shift register for 0x7e detect
     uint8_t  ui_seen;          // 0x03 control byte decoded past address field — LED gate
     uint8_t  data_byte;
@@ -136,13 +142,13 @@ typedef struct TNC {
 #endif
 
     // output_packet
-    int pkt_cnt;
+    uint32_t pkt_cnt;
 
     // bell202_decode
     int delayed[DELAYED_N];
     int delay_idx;
     int cdt;
-    int cdt_lvl;
+    int64_t cdt_lvl;
     int avg;
     uint8_t cdt_pin;
 
@@ -190,7 +196,9 @@ typedef struct TNC {
     uint8_t ctrl_chan;
     uint8_t data_chan;
     uint32_t data_chan_mask;
-    uint8_t busy;
+    volatile uint8_t busy;
+    uint32_t tx_started_us;
+    uint64_t queue_started_us;
 
     // Bell202 wave generator
     int next;
@@ -203,7 +211,7 @@ typedef struct TNC {
 
     // send data queue
     queue_t send_queue;
-    int send_time;
+    uint32_t send_time;
     int send_len;
     int send_state;
     int send_data;
@@ -313,6 +321,7 @@ typedef struct TTY {
     uint8_t cmd_buf[CMD_BUF_LEN + 1];
     int kiss_idx;
     int cmd_idx;
+    bool cmd_overflow;
 
     uint8_t num;        // index of tty[]
 
