@@ -45,10 +45,10 @@
 #define NUM_SLICERS 9
 
 // Recent-frame ring for cross-slicer dedupe: when multiple slicers decode the
-// same frame, only the first to FCS_OK wins. Ring stores (fcs ^ len) keys
-// with a 1.5 s expiry at 10 ms ticks.
+// same frame, only the first valid copy wins. Keep exact bytes for 10..20 ms
+// (two 10 ms ticks), far shorter than the shortest accepted on-air frame.
 #define DEDUP_RING 8
-#define DEDUP_TIMEOUT_TICKS 150
+#define DEDUP_TIMEOUT_TICKS 2
 
 // Fix-bits single-bit-invert salvage on FCS-fail frames. Different slicers
 // often produce the same garbled bytes for an impossible-to-decode frame —
@@ -56,6 +56,7 @@
 // slicers in a 1.5 s window.
 #define ENABLE_FIXBITS  0
 #define FIXBITS_RING    4
+#define FIXBITS_TIMEOUT_TICKS 150
 
 #define CONTROL_N 10
 #define DAC_QUEUE_LEN 64
@@ -115,6 +116,13 @@ typedef struct SLICER {
     uint8_t  data[DATA_LEN];
 } slicer_t;
 
+typedef struct RX_DEDUP_ENTRY {
+    uint32_t ts;         // first publication tick; duplicates do not refresh it
+    uint16_t len;        // includes FCS; zero means empty
+    uint8_t data[AX25_MAX_FRAME_LEN + 2];
+} rx_dedup_entry_t;
+
+// Legacy repair-attempt cache (unused with ENABLE_FIXBITS=0).
 typedef struct DEDUP_ENTRY {
     uint16_t fcs;        // trailing 16-bit FCS
     uint16_t len;        // total frame length including FCS
@@ -131,7 +139,7 @@ typedef struct TNC {
     slicer_t slicer[NUM_SLICERS];
 
     // recent-frame dedupe ring (cross-slicer)
-    dedup_entry_t dedup_ring[DEDUP_RING];
+    rx_dedup_entry_t dedup_ring[DEDUP_RING];
     uint8_t       dedup_head;
 
 #if ENABLE_FIXBITS

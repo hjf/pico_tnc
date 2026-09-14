@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include "pico/stdlib.h"
 
 //#include "timer.h"
@@ -114,40 +115,29 @@ static void display_packet(tty_t *ttyp, tnc_t *tp, slicer_t *s)
 #endif
 }
 
-// Return true if this just-decoded frame has been seen recently in any
-// slicer's output (cross-slicer dedupe). On miss, insert and return false.
-//
-// Match criteria: 16-bit trailing FCS + 16-bit length + first 4 frame bytes
-// (which start the AX.25 destination call). That's ~64 effective bits of
-// entropy per entry — false-positive collisions across distinct real frames
-// within the 1.5 s window are negligible. (A 16-bit FCS-only key gave ~17
-// false dedupes per WA8LMF Track 1 with 5 slicers × ~1000 frames.)
+// Merge only near-simultaneous slicer copies. A minimum accepted frame takes
+// at least 120 ms on air at 1200 baud; the 10..20 ms tick window cannot hide
+// a following transmission. Track 1's measured slicer skew is one sample.
+// Compare all bytes: equal FCS/length/destination prefixes are not unique.
 static bool dedup_check_insert(tnc_t *tp, const uint8_t *data, int len)
 {
-    uint16_t fcs = (uint16_t)data[len - 2] | ((uint16_t)data[len - 1] << 8);
     uint32_t now = tnc_time();
-
     for (int i = 0; i < DEDUP_RING; i++) {
-        dedup_entry_t *e = &tp->dedup_ring[i];
-        if (e->ts == 0) continue;                     // empty
-        if ((now - e->ts) >= DEDUP_TIMEOUT_TICKS) {   // expired
-            e->ts = 0;
+        rx_dedup_entry_t *e = &tp->dedup_ring[i];
+        if (e->len == 0) continue;
+        if ((uint32_t)(now - e->ts) >= DEDUP_TIMEOUT_TICKS) {
+            e->len = 0;
             continue;
         }
-        if (e->fcs == fcs && e->len == (uint16_t)len &&
-            e->prefix[0] == data[0] && e->prefix[1] == data[1] &&
-            e->prefix[2] == data[2] && e->prefix[3] == data[3]) {
-            return true;                               // duplicate
+        if (e->len == (uint16_t)len && !memcmp(e->data, data, len)) {
+            return true;
         }
     }
 
-    // insert
-    dedup_entry_t *e = &tp->dedup_ring[tp->dedup_head];
-    e->fcs = fcs;
+    rx_dedup_entry_t *e = &tp->dedup_ring[tp->dedup_head];
+    memcpy(e->data, data, len);
     e->len = (uint16_t)len;
-    e->prefix[0] = data[0]; e->prefix[1] = data[1];
-    e->prefix[2] = data[2]; e->prefix[3] = data[3];
-    e->ts  = now ? now : 1;  // avoid ts==0
+    e->ts = now;  // length marks occupancy; tick zero is valid, including wrap
     tp->dedup_head = (tp->dedup_head + 1) & (DEDUP_RING - 1);
     return false;
 }
@@ -173,7 +163,7 @@ static bool fixbits_recently_tried(tnc_t *tp, const uint8_t *data, int len)
     for (int i = 0; i < FIXBITS_RING; i++) {
         dedup_entry_t *e = &tp->fixbits_ring[i];
         if (e->ts == 0) continue;
-        if ((now - e->ts) >= DEDUP_TIMEOUT_TICKS) { e->ts = 0; continue; }
+        if ((now - e->ts) >= FIXBITS_TIMEOUT_TICKS) { e->ts = 0; continue; }
         if (e->fcs == fcs && e->len == (uint16_t)len &&
             e->prefix[0] == data[0] && e->prefix[1] == data[1] &&
             e->prefix[2] == data[2] && e->prefix[3] == data[3]) {
@@ -212,12 +202,22 @@ static bool fixbits_try(uint8_t *data, int len)
 }
 #endif
 
+// Optional host trace: complete candidates, validation, dedupe and publication.
+#ifdef DECODE_TRACE
+extern void decode_trace(tnc_t *tp, slicer_t *s, const char *stage);
+#define TRACE(stage) decode_trace(tp, s, stage)
+#else
+#define TRACE(stage) ((void)0)
+#endif
+
 static void output_packet(tnc_t *tp, slicer_t *s)
 {
     int len = s->data_cnt;
     uint8_t *data = s->data;
 
     if (len < MIN_LEN || len > AX25_MAX_FRAME_LEN + 2) return;
+
+    TRACE("candidate");
 
     // FCS check
     if (ax25_fcs(0, data, len) != FCS_OK) {
@@ -248,16 +248,23 @@ static void output_packet(tnc_t *tp, slicer_t *s)
     diag_fcs_ok_per_slicer[slicer_idx]++;
 #endif
 
-    if (!ax25_frame_valid(data, len - 2)) return;
+    TRACE("fcs_ok");
+    if (!ax25_frame_valid(data, len - 2)) {
+        TRACE("invalid");
+        return;
+    }
 
     // Cross-slicer dedupe: another slicer may have already published the
-    // same frame on its own end-of-frame within the past 1.5 s.
+    // same frame on its own end-of-frame within the past 10..20 ms.
     if (dedup_check_insert(tp, data, len)) {
+        TRACE("duplicate");
 #ifdef DIAGNOSTICS
         diag_dedup_hit_per_slicer[slicer_idx]++;
 #endif
         return;
     }
+
+    TRACE("published");
 
     // count received packet
     ++tp->pkt_cnt;
