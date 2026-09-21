@@ -46,6 +46,7 @@ add_executable(pico_tnc
         digipeat.c
         beacon.c
         kiss.c
+        kiss_stream.c
         )
 
 pico_generate_pio_header(pico_tnc ${CMAKE_CURRENT_LIST_DIR}/pio_dac.pio)

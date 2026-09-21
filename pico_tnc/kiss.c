@@ -33,10 +33,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tty.h"
 #include "digipeat.h"
 
-#define FEND 0xc0
-#define FESC 0xdb
-#define TFEND 0xdc
-#define TFESC 0xdd
+#define FEND KISS_FEND_BYTE
+#define FESC KISS_FESC_BYTE
+#define TFEND KISS_TFEND_BYTE
+#define TFESC KISS_TFESC_BYTE
 
 #define KISS_PACKET_LEN 1024
 
@@ -107,73 +107,21 @@ void kiss_packet(tty_t *ttyp)
     }
 }
 
+static bool kiss_serial_frame(void *ctx, const uint8_t *frame, int len)
+{
+    tty_t *ttyp = ctx;
+    (void)frame;
+    ttyp->kiss_idx = len;
+    kiss_packet(ttyp);
+    return ttyp->kiss_mode != 0;
+}
+
 void kiss_input(tty_t * ttyp, int ch)
 {
     ttyp->kiss_timeout = tnc_time();
-
-    switch (ttyp->kiss_state) {
-
-        case KISS_OUTSIDE:
-            if (ch == FEND) {
-                ttyp->kiss_idx = 0;
-                ttyp->kiss_timeout = tnc_time();
-                ttyp->kiss_state = KISS_INSIDE;
-            }
-            break;
-
-        case KISS_INSIDE:
-
-            switch (ch) {
-                case FEND:
-                    kiss_packet(ttyp);      // send kiss packet
-                    ttyp->kiss_idx = 0;
-                    // FEND is both the end of one frame and the start of the
-                    // next. Staying inside also accepts repeated sync FENDs.
-                    ttyp->kiss_state = ttyp->kiss_mode ? KISS_INSIDE : KISS_OUTSIDE;
-                    break;
-
-                case FESC:
-                    ttyp->kiss_state = KISS_FESC;
-                    break;
-
-                default:
-                    if (ttyp->kiss_idx >= KISS_PACKET_LEN) {
-                        ttyp->kiss_state = KISS_ERROR;
-                        break;
-                    }
-                    ttyp->kiss_buf[ttyp->kiss_idx++] = ch;
-            }
-            break;
-
-        case KISS_FESC:
-
-            switch (ch) {
-                case TFEND:
-                    ch = FEND;
-                    break;
-                    
-                case TFESC:
-                    ch = FESC;
-                    break;
-                default:
-                    ttyp->kiss_idx = 0;
-                    ttyp->kiss_state = ch == FEND ? KISS_INSIDE : KISS_ERROR;
-                    return;
-            }
-
-            if (ttyp->kiss_idx >= KISS_PACKET_LEN) {
-                ttyp->kiss_state = KISS_ERROR;
-                break;
-            }
-
-            ttyp->kiss_buf[ttyp->kiss_idx++] = ch;
-            ttyp->kiss_state = KISS_INSIDE;
-            break;
-
-        case KISS_ERROR:
-            // discard chars until FEND
-            if (ch == FEND) { ttyp->kiss_idx = 0; ttyp->kiss_state = KISS_INSIDE; }
-    }
+    kiss_stream_input(ttyp->kiss_buf, KISS_PACKET_LEN, &ttyp->kiss_idx,
+                      &ttyp->kiss_state, (uint8_t)ch,
+                      kiss_serial_frame, ttyp);
 }
 
 void kiss_output(tty_t *ttyp, tnc_t *tp, slicer_t *s)

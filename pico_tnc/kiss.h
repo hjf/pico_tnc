@@ -31,13 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "tnc.h"
-
-enum KISS_STATE {
-    KISS_OUTSIDE = 0,
-    KISS_INSIDE,
-    KISS_FESC,
-    KISS_ERROR,
-};
+#include "kiss_stream.h"
 
 void kiss_input(tty_t *ttyp, int ch);
 void kiss_output(tty_t *ttyp, tnc_t *tp, slicer_t *s);
